@@ -335,6 +335,39 @@ function main(): number {
     failures.push(`end-to-end: exporter reported unsupported items: ${e2eResult.unsupported.join('; ')}`);
   }
 
+  /* ---- 7. the firmware must reach the board that compiles it -------------
+   * Velxio edits and compiles exactly one file group per board: the one named
+   * by `board.activeFileGroupId`, which `addBoard` assigns as `group-<boardId>`
+   * and `loadProjectState` only overrides when the payload's own group carries
+   * files. A .vlx that writes its sources anywhere else therefore imports as a
+   * circuit with no code — canvas right, editor empty, compile with no files,
+   * and no error on either side. Assert the convention against the vendored
+   * source rather than trusting it.
+   */
+  const storePath = path.join(velxioFrontendSrc, 'store', 'useSimulatorStore.ts');
+  const storeSource = fs.readFileSync(storePath, 'utf-8');
+  const velxioBindsGroupTo = /activeFileGroupId:\s*`group-\$\{id\}`/.test(storeSource);
+  if (!velxioBindsGroupTo) {
+    failures.push(
+      'end-to-end: the vendored Velxio no longer binds a board to `group-<boardId>` in addBoard — ' +
+        're-check velxioFileGroupId() in modules/simulation/velxio-project.ts, or pushed sketches will land in an orphan group.',
+    );
+  }
+  const vlx = e2eResult.project;
+  const boundBoard = vlx.boards[0];
+  // Sources must live in the group a STOCK Velxio binds to the board — not
+  // merely in "a group the file also mentions", which is self-consistent even
+  // when the emulator never looks at it.
+  const boundGroup = `group-${boundBoard?.id}`;
+  const sketchWhereStockVelxioLooks = (vlx.fileGroups[boundGroup] ?? []).some((file) => file.name.endsWith('.ino'));
+  if (!sketchWhereStockVelxioLooks || boundBoard?.activeFileGroupId !== boundGroup) {
+    failures.push(
+      `end-to-end: the sketch must sit in file group "${boundGroup}" and the board must name that same group ` +
+        `(got group "${boundBoard?.activeFileGroupId}", groups ${JSON.stringify(Object.keys(vlx.fileGroups))}) — ` +
+        'anything else pushes a canvas with no code.',
+    );
+  }
+
   /* ---- Opportunity report (informational) ------------------------------- */
   const opportunities: string[] = [];
   for (const component of SEED_COMPONENTS) {

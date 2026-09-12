@@ -19,6 +19,9 @@
  *      than an honest gap.
  *   3. Every mapping table here has an inverse in `vlx-sync.ts`, which folds
  *      canvas edits back into `diagram.json`. Change one, change the other.
+ *      The same holds for the file-group name a board compiles — see
+ *      `velxioFileGroupId`: the firmware only reaches the emulator if it is
+ *      written into the group the imported board ends up pointing at.
  */
 
 import type { Diagram } from '@/types/diagram';
@@ -205,7 +208,28 @@ const PART_ROW_HEIGHT = 170;
 const PIN_OFFSET = { x: 40, y: 30 };
 
 const BOARD_ID = 'board-1';
-const FILE_GROUP_ID = 'group-1';
+
+/**
+ * The file group a Velxio board compiles — and the ONLY one its editor shows.
+ *
+ * Velxio resolves a board's sources through `board.activeFileGroupId`
+ * (`utils/boardCompile.ts` → `getGroupFiles(board.activeFileGroupId)`), and on
+ * import `addBoard` assigns that field itself, as `group-<boardId>`; the value
+ * carried in the file is applied afterwards, only if the group exists in the
+ * payload (see `useSimulatorStore.loadProjectState`). Writing the sources into
+ * an id of our own choosing therefore produces the worst possible outcome: the
+ * circuit renders on the canvas, and the firmware sits in an orphan group that
+ * nothing reads — an empty editor and a compile with no files.
+ *
+ * So the group name is not ours to invent. It is derived from the board id
+ * with Velxio's own convention, and `verify:simulator` asserts the convention
+ * still matches the vendored source.
+ */
+export function velxioFileGroupId(boardId: string): string {
+  return `group-${boardId}`;
+}
+
+const FILE_GROUP_ID = velxioFileGroupId(BOARD_ID);
 
 export interface VelxioProjectInput {
   projectName: string;
@@ -636,6 +660,23 @@ export function generateVelxioProject(input: VelxioProjectInput): VelxioProjectR
     wires,
     activeBoardId: BOARD_ID,
   };
+
+  /*
+   * Lock the board ⇄ file-group binding. A .vlx whose sources sit in a group
+   * no board references imports as a circuit with no code — the exact failure
+   * this module exists to prevent, and one the emulator swallows silently. If
+   * a future change ever decouples the two, it is reported here rather than
+   * discovered by a user staring at an empty editor.
+   */
+  const boundBoard = project.boards[0];
+  if (boundBoard && group.length > 0) {
+    const reads = velxioFileGroupId(boundBoard.id);
+    if ((project.fileGroups[reads]?.length ?? 0) === 0) {
+      unsupported.push(
+        `firmware: sources were written to "${boundBoard.activeFileGroupId}", but board "${boundBoard.id}" compiles "${reads}" — the sketch would not reach the editor.`,
+      );
+    }
+  }
 
   return {
     project,

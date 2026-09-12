@@ -132,6 +132,8 @@ export interface SimulationPayload {
     vlx: string;
     name: string;
     boardKind: string | null;
+    /** The file group the board compiles — the only place its sources can land. */
+    fileGroup: string | null;
     parts: number;
     wires: number;
     files: string[];

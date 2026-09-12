@@ -31,7 +31,7 @@
  * browser-side by necessity as well as by design.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { Badge, Card, Empty, Loader, Notice, SectionTitle } from '../ui';
 import { useHub } from '../hub-context';
@@ -101,20 +101,19 @@ export function SimulationPanel() {
   });
 
   // Velxio only streams serial once someone asks for it. Ask as soon as the
-  // canvas is live, and auto-start the emulator so the dashboard iframe
-  // receives telemetry the moment it attaches — the user shouldn't have to
-  // reach into the embedded Velxio iframe to click Play every time.
-  const startedRef = useRef(false);
+  // canvas is live, and start the emulator so the dashboard iframe receives
+  // telemetry the moment it attaches — the user shouldn't have to reach into
+  // the embedded Velxio iframe to click Play every time.
+  //
+  // It is keyed on the PUSH, not on "pushed" alone: a sketch updated in the
+  // workbench re-pushes the .vlx, and a board still running the previous build
+  // would report that update as a success. (Velxio compiles before it starts —
+  // see `utils/embedBridge.ts` — so a re-pushed program is actually rebuilt.)
   useEffect(() => {
-    if (velxio.status.state !== 'pushed') return;
+    if (velxio.pushCount === 0) return;
     velxio.subscribeSerial();
-    if (!startedRef.current) {
-      startedRef.current = true;
-      // Ask Velxio to run the emulation. The embed bridge in Velxio
-      // (src/utils/embedBridge.ts) already handles {type:'velxio:run'}.
-      velxio.run();
-    }
-  }, [velxio]);
+    velxio.run();
+  }, [velxio.pushCount, velxio.subscribeSerial, velxio.run]);
 
   /* ── Canvas → diagram.json --------------------------------------------- */
   const pullCanvas = useCallback(async () => {
@@ -191,7 +190,7 @@ export function SimulationPanel() {
 
         <span className="sim__spacer" />
 
-        <LinkPill label="emulator" state={velxioStatusLabel(velxio.status.state)} tone={velxioTone(velxio.status.state)} />
+        <LinkPill label="emulator" state={velxioStatusLabel(velxio.status.state, velxio.running)} tone={velxioTone(velxio.status.state)} />
         <LinkPill
           label="dashboard"
           state={dashboard.attached ? 'attached' : 'waiting'}
@@ -225,6 +224,7 @@ export function SimulationPanel() {
             velxioUrl={velxioUrl}
             frameRef={velxio.frameRef}
             status={velxio.status}
+            runError={velxio.runError}
             onPull={() => void pullCanvas()}
             syncing={syncing}
             syncNote={syncNote}
@@ -249,6 +249,7 @@ function SimulationHalf({
   velxioUrl,
   frameRef,
   status,
+  runError,
   onPull,
   syncing,
   syncNote,
@@ -258,6 +259,7 @@ function SimulationHalf({
   velxioUrl: string | null;
   frameRef: (node: HTMLIFrameElement | null) => void;
   status: ReturnType<typeof useVelxioBridge>['status'];
+  runError: string | null;
   onPull: () => void;
   syncing: boolean;
   syncNote: { tone: 'ok' | 'err'; text: string } | null;
@@ -272,7 +274,11 @@ function SimulationHalf({
           <SectionTitle>Velxio emulator — embedded from {velxioUrl}</SectionTitle>
           <p className="faint">
             {velxio
-              ? `${velxio.boardKind ?? 'board'} · ${velxio.parts} part(s) · ${velxio.wires} wire(s) · ${velxio.files.length} source file(s), pushed onto the canvas automatically.`
+              ? `${velxio.boardKind ?? 'board'} · ${velxio.parts} part(s) · ${velxio.wires} wire(s) · ${
+                  velxio.files.length
+                } source file(s) in the board's compile group${
+                  velxio.fileGroup ? ` (${velxio.fileGroup})` : ''
+                }, pushed and built on the canvas automatically.`
               : payload.blocked.velxio}
           </p>
         </div>
@@ -281,6 +287,25 @@ function SimulationHalf({
           {syncing ? 'pulling…' : 'pull canvas → diagram.json'}
         </button>
       </div>
+
+      {runError ? (
+        <Notice tone="err" title="The pushed firmware did not build">
+          {runError} — the canvas is loaded and the circuit is correct, so only the build failed. The board was left
+          stopped rather than run against a program from an earlier push.
+        </Notice>
+      ) : null}
+
+      {/* Only when this build DOES have firmware: while the pipeline is still
+          running the sketch has simply not been generated yet, and `blocked`
+          already says so in the line above. */}
+      {velxio && velxio.files.length === 0 && !payload.blocked.software ? (
+        <Notice tone="warn" title="No firmware reached the board">
+          The .vlx pushed to the canvas has an empty file group{velxio.fileGroup ? ` ("${velxio.fileGroup}")` : ''}, so
+          the emulator has a circuit and nothing to compile. Wireup writes the sketch into the exact group the imported
+          board reads — if this project does have firmware and you still see this, this Velxio build and the exporter
+          have drifted (see <code>velxioFileGroupId</code>).
+        </Notice>
+      ) : null}
 
       {syncNote ? (
         <Notice tone={syncNote.tone === 'ok' ? 'ok' : 'err'} title={syncNote.tone === 'ok' ? 'Canvas synced' : 'Sync failed'}>
@@ -477,14 +502,16 @@ function LinkPill({ label, state, tone }: { label: string; state: string; tone: 
   );
 }
 
-function velxioStatusLabel(state: string): string {
+function velxioStatusLabel(state: string, running = false): string {
   switch (state) {
     case 'waiting':
       return 'waiting';
     case 'ready':
       return 'connected';
     case 'pushed':
-      return 'circuit loaded';
+      // "running" is the answer to the question this pill exists for: the
+      // pushed build did not just load, it built and started.
+      return running ? 'running' : 'circuit loaded';
     case 'error':
       return 'error';
     default:

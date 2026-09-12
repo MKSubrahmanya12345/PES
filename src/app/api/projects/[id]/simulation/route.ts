@@ -53,9 +53,19 @@ export async function GET(_request: NextRequest, context: RouteContext) {
             vlx: bundle.velxio.json,
             name: bundle.velxio.project.name,
             boardKind: bundle.velxio.project.boards[0]?.boardKind ?? null,
+            /** The file group the board actually compiles — the binding that
+             *  decides whether the sketch lands at all. Surfaced because a
+             *  mismatch is invisible from the canvas. */
+            fileGroup: bundle.velxio.project.boards[0]?.activeFileGroupId ?? null,
             parts: bundle.velxio.project.components.length,
             wires: bundle.velxio.project.wires.length,
-            files: bundle.velxio.project.fileGroups['group-1']?.map((file) => file.name) ?? [],
+            // The sources the BOARD compiles — its own file group, not just the
+            // first group in the file. Reading them by group id is what proves
+            // the binding held; a group the board does not reference would show
+            // up here as files that never reach the editor.
+            files: bundle.velxio.project.fileGroups[
+              bundle.velxio.project.boards[0]?.activeFileGroupId ?? ''
+            ]?.map((file) => file.name) ?? [],
             unsupported: bundle.velxio.unsupported,
             warnings: bundle.velxio.warnings,
             cadBench: bundle.velxio.cadBench,
