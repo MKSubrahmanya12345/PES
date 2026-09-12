@@ -303,7 +303,7 @@ export async function fetchEverflow(id: string): Promise<EverflowPayload> {
 
 export async function answerDoubt(
   id: string,
-  input: { doubtId: string; value?: string; via: 'human' | 'skipped' },
+  input: { doubtId: string; value?: string; selectedOptions?: string[]; via: 'human' | 'skipped' },
 ): Promise<{ project: ProjectState; openDoubts: number }> {
   const response = await fetch(`/api/projects/${encodeURIComponent(id)}/intake/answer`, {
     method: 'POST',

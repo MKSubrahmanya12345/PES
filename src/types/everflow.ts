@@ -270,12 +270,17 @@ export interface ProjectDoubt {
   /** Blocking doubts gate the Build button (soft gate: skipping records an assumption). */
   blocking: boolean;
   options: string[];
+  /** Whether the intake agent knows that multiple options may coexist. */
+  allowMultiple?: boolean;
   proposedDefault: string | null;
   /** The AI's confidence that the default is right, 0..1. */
   confidence: number;
   status: DoubtStatus;
   answer: {
+    /** Human-readable answer kept for backwards-compatible project records. */
     value: string;
+    /** Concrete choices selected when the user selected more than one option. */
+    selectedOptions?: string[];
     via: 'human' | 'ai_default' | 'skipped';
     at: string;
   } | null;

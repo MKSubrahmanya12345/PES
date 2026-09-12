@@ -111,6 +111,41 @@ function PartMesh({
   // a part with no spec simply renders as geometry, exactly as before.
   const spec = useCadSpec(place.key);
   const groupRef = useRef<ThreeGroup>(null);
+  const isPushbutton = place.key === 'pushbutton' || place.key === 'pushbutton-6mm';
+  const pressedRef = useRef(false);
+
+  // The 3D bench is a second view of the mounted simulator, not a second
+  // button model. Feed the same DOM events that the 2D wokwi element and the
+  // existing simulation registries already consume. The window release
+  // listener matters when the pointer leaves the cap before it is released.
+  const releasePushbutton = useCallback(() => {
+    if (!isPushbutton || !pressedRef.current) return;
+    pressedRef.current = false;
+    document.getElementById(id)?.dispatchEvent(new Event('button-release'));
+  }, [id, isPushbutton]);
+
+  useEffect(() => {
+    if (!isPushbutton) return undefined;
+    const onPointerUp = () => releasePushbutton();
+    const onPointerCancel = () => releasePushbutton();
+    window.addEventListener('pointerup', onPointerUp);
+    window.addEventListener('pointercancel', onPointerCancel);
+    return () => {
+      window.removeEventListener('pointerup', onPointerUp);
+      window.removeEventListener('pointercancel', onPointerCancel);
+      releasePushbutton();
+    };
+  }, [isPushbutton, releasePushbutton]);
+
+  const pressPushbutton = useCallback(
+    (e: { stopPropagation: () => void }) => {
+      if (!isPushbutton || pressedRef.current) return;
+      e.stopPropagation();
+      pressedRef.current = true;
+      document.getElementById(id)?.dispatchEvent(new Event('button-press'));
+    },
+    [id, isPushbutton],
+  );
 
   return (
     <group
@@ -121,6 +156,9 @@ function PartMesh({
       position={[place.pos.x, place.pos.y, place.pos.z]}
       rotation={[0, place.rotY, 0]}
       scale={place.scale}
+      onPointerDown={isPushbutton ? pressPushbutton : undefined}
+      onPointerUp={isPushbutton ? releasePushbutton : undefined}
+      onPointerCancel={isPushbutton ? releasePushbutton : undefined}
       onDoubleClick={(e) => {
         if (!movable) return;
         e.stopPropagation();

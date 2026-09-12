@@ -36,12 +36,19 @@ function DoubtCard({
 }) {
   const [custom, setCustom] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [multiSelect, setMultiSelect] = useState(doubt.allowMultiple === true);
+  const [selectedOptions, setSelectedOptions] = useState<string[]>([]);
 
   const send = useCallback(
-    async (value: string | null, via: 'human' | 'skipped') => {
+    async (value: string | null, via: 'human' | 'skipped', choices?: string[]) => {
       setSubmitting(true);
       try {
-        await answerDoubt(projectId, { doubtId: doubt.id, value: value ?? undefined, via });
+        await answerDoubt(projectId, {
+          doubtId: doubt.id,
+          value: value ?? undefined,
+          ...(choices && choices.length > 0 ? { selectedOptions: choices } : {}),
+          via,
+        });
         onAnswered();
       } catch {
         setSubmitting(false);
@@ -49,6 +56,12 @@ function DoubtCard({
     },
     [projectId, doubt, onAnswered],
   );
+
+  const toggleOption = useCallback((option: string) => {
+    setSelectedOptions((current) =>
+      current.includes(option) ? current.filter((entry) => entry !== option) : [...current, option],
+    );
+  }, []);
 
   const answered = doubt.status !== 'open';
 
@@ -69,8 +82,29 @@ function DoubtCard({
         </p>
       ) : (
         <div className="evf-doubt__actions">
+          {doubt.options.length > 1 && (
+            <button
+              type="button"
+              className={`evf-opt evf-opt--mode${multiSelect ? ' is-selected' : ''}`}
+              disabled={submitting || busy}
+              aria-pressed={multiSelect}
+              onClick={() => {
+                setMultiSelect((current) => !current);
+                setSelectedOptions([]);
+              }}
+            >
+              {multiSelect ? 'choose one' : 'select multiple'}
+            </button>
+          )}
           {doubt.options.map((option) => (
-            <button key={option} type="button" className="evf-opt" disabled={submitting || busy} onClick={() => send(option, 'human')}>
+            <button
+              key={option}
+              type="button"
+              className={`evf-opt${selectedOptions.includes(option) ? ' is-selected' : ''}`}
+              disabled={submitting || busy}
+              aria-pressed={selectedOptions.includes(option)}
+              onClick={() => (multiSelect ? toggleOption(option) : void send(option, 'human'))}
+            >
               {option}
             </button>
           ))}
@@ -97,8 +131,13 @@ function DoubtCard({
             />
           )}
           <div className="evf-doubt__foot">
+            {multiSelect && selectedOptions.length > 0 ? (
+              <button type="button" className="btn btn--sm" disabled={submitting || busy} onClick={() => void send(null, 'human', selectedOptions)}>
+                Use {selectedOptions.length} selections
+              </button>
+            ) : null}
             {custom.trim() ? (
-              <button type="button" className="btn btn--sm" disabled={submitting || busy} onClick={() => send(custom.trim(), 'human')}>
+              <button type="button" className="btn btn--sm" disabled={submitting || busy} onClick={() => void send(custom.trim(), 'human')}>
                 Use this answer
               </button>
             ) : null}

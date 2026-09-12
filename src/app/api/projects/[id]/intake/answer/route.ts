@@ -13,7 +13,7 @@ import { describeError, logger } from '@/lib/logging/logger';
 import { appendEvents, getProjectState, saveProjectState } from '@/lib/mongodb/projects';
 import { createId } from '@/lib/validation/ids';
 import { nowIso } from '@/lib/validation/time';
-import { buildIntakeContext } from '@/modules/everflow';
+import { answerValueForDoubt, buildIntakeContext } from '@/modules/everflow';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -22,6 +22,8 @@ export const revalidate = 0;
 const AnswerSchema = z.object({
   doubtId: z.string().min(1),
   value: z.string().trim().max(2000).optional(),
+  /** Explicit multi-select values from the intake UI. */
+  selectedOptions: z.array(z.string().trim().min(1).max(200)).max(10).optional(),
   /** `human` = answered with a value; `skipped` = accept the default as an assumption. */
   via: z.enum(['human', 'skipped']).default('human'),
 });
@@ -58,10 +60,16 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
           answer: { value: doubt.proposedDefault ?? 'agent decides', via: 'skipped' as const, at },
         };
       }
+      const resolved = answerValueForDoubt(doubt, item.value, item.selectedOptions);
       return {
         ...doubt,
         status: 'answered' as const,
-        answer: { value: item.value ?? doubt.proposedDefault ?? '', via: 'human' as const, at },
+        answer: {
+          value: resolved.value || doubt.proposedDefault || '',
+          ...(resolved.selectedOptions ? { selectedOptions: resolved.selectedOptions } : {}),
+          via: 'human' as const,
+          at,
+        },
       };
     });
 

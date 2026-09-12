@@ -33,6 +33,7 @@ import { proposeIntake } from '@/lib/bedrock/operations';
 import { analyzePrompt, formatAnalysisForPrompt } from '@/modules/project-understanding/heuristics';
 
 export {
+  answerValueForDoubt,
   buildIntakeContext,
   composeIntake,
   deterministicExpansion,
@@ -104,6 +105,7 @@ const DoubtSeedSchema = z
     decider: z.enum(['human', 'ai', 'ai_with_veto']).catch('human'),
     blocking: z.boolean().catch(false),
     options: z.array(z.string().trim().min(1).max(80)).max(4).catch([]),
+    allowMultiple: z.boolean().catch(false),
     proposedDefault: z.string().trim().max(80).nullable().catch(null),
     confidence: z.number().min(0).max(1).catch(0.5),
   })
@@ -153,6 +155,7 @@ function parseIntakePayload(payload: unknown): IntakeLlmPayload | null {
       decider: doubt.decider,
       blocking: doubt.blocking,
       options: doubt.options,
+      ...(doubt.allowMultiple ? { allowMultiple: true } : {}),
       proposedDefault: doubt.proposedDefault,
       confidence: doubt.confidence,
     })),

@@ -1742,6 +1742,18 @@ html {
 
 .evf-opt:hover { background: var(--bg-hover); }
 
+.evf-opt.is-selected {
+  background: var(--accent);
+  border-color: var(--accent-deep);
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.evf-opt--mode {
+  border-style: dashed;
+  color: var(--text-muted);
+}
+
 .evf-doubt__foot {
   display: flex;
   gap: 8px;
