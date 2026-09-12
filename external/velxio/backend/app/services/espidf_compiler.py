@@ -4204,10 +4204,19 @@ class ESPIDFCompiler:
                         )
                         break
 
-                cmake_text = cmake_text.replace(
-                    'INCLUDE_DIRS "."',
-                    'INCLUDE_DIRS "." "../user_libs/user_libs_all"',
-                )
+                # Add wireup firmware shim headers to include dirs
+                wireup_shim_dir = Path(__file__).parent.parent.parent.parent / "scripts" / "firmware-shim"
+                if wireup_shim_dir.exists():
+                    shim_dir_str = f'"{wireup_shim_dir}"'
+                    cmake_text = cmake_text.replace(
+                        'INCLUDE_DIRS "."',
+                        f'INCLUDE_DIRS "." "../user_libs/user_libs_all" {shim_dir_str}',
+                    )
+                else:
+                    cmake_text = cmake_text.replace(
+                        'INCLUDE_DIRS "."',
+                        'INCLUDE_DIRS "." "../user_libs/user_libs_all"',
+                    )
 
                 cmake_path.write_text(cmake_text, encoding='utf-8')
                 logger.info('[espidf] Patched main CMakeLists: REQUIRES += user_libs_all, INCLUDE_DIRS += user_libs_all')

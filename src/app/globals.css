@@ -2266,12 +2266,8 @@ pre,
   justify-content: flex-start;
   overflow: hidden;
   padding: clamp(62px, 10vh, 112px) 20px 74px;
-  background:
-    radial-gradient(circle at 82% 12%, rgba(185, 216, 62, 0.08), transparent 27rem),
-    linear-gradient(rgba(245, 240, 230, 0.045) 1px, transparent 1px) 0 0 / 44px 44px,
-    linear-gradient(90deg, rgba(245, 240, 230, 0.045) 1px, transparent 1px) 0 0 / 44px 44px,
-    var(--ink);
-  color: #f5f0e6;
+  background: #ffffff;
+  color: var(--text);
 }
 
 .landing::after {
@@ -2325,7 +2321,7 @@ pre,
 .landing__title {
   max-width: 760px;
   margin-bottom: 20px;
-  color: #f5f0e6;
+  color: var(--text);
   font-family: var(--display);
   font-size: clamp(42px, 6.5vw, 76px);
   font-weight: 620;
@@ -2948,13 +2944,16 @@ body {
   width: 82px;
   height: 82px;
   border: 1px solid var(--accent);
-  border-radius: 50%;
-  background: rgba(16, 33, 47, 0.86);
+  border-radius: 12px;
+  background: #ffffff;
   box-shadow: 0 0 0 12px rgba(185, 216, 62, 0.05), 0 0 50px rgba(185, 216, 62, 0.12);
-  color: var(--accent);
-  font-family: var(--display);
-  font-size: 30px;
   transform: translate(-50%, -50%);
+}
+
+.landing__beacon-logo {
+  width: 60px;
+  height: 60px;
+  object-fit: contain;
 }
 
 .landing__beacon-label {
@@ -7853,4 +7852,62 @@ text-decoration: underline;
   .dock { height: 60vh; }
   .dock__headline { max-width: 40vw; }
   .dock__cwd { max-width: 46vw; }
+}
+/* Improved checkbox styling for skip doubt section */
+.prompt-form__direct-improved {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  transition: all 0.2s ease;
+}
+
+.prompt-form__direct-improved:hover {
+  color: var(--accent-deep);
+}
+
+.prompt-form__direct-improved input[type="checkbox"] {
+  display: none;
+}
+
+.prompt-form__checkbox-custom {
+  position: relative;
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--border-strong);
+  border-radius: 4px;
+  background: var(--bg);
+  transition: all 0.2s ease;
+  flex-shrink: 0;
+}
+
+.prompt-form__checkbox-custom::after {
+  content: '';
+  position: absolute;
+  left: 5px;
+  top: 2px;
+  width: 4px;
+  height: 8px;
+  border: solid var(--bg);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.prompt-form__direct-improved input[type="checkbox"]:checked + .prompt-form__checkbox-custom {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.prompt-form__direct-improved input[type="checkbox"]:checked + .prompt-form__checkbox-custom::after {
+  opacity: 1;
+}
+
+.prompt-form__direct-improved:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }

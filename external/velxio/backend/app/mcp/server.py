@@ -19,6 +19,7 @@ Transport:
 from __future__ import annotations
 
 import json
+import math
 import sys
 from typing import Annotated, Any
 
@@ -45,6 +46,47 @@ mcp = FastMCP(
 
 _arduino = ArduinoCLIService()
 
+_HEADER_LIBRARY_REQUIREMENTS: dict[str, tuple[str, ...]] = {
+    "Adafruit_MPU6050.h": (
+        "Adafruit MPU6050",
+        "Adafruit Unified Sensor",
+        "Adafruit BusIO",
+    ),
+}
+
+
+def _libraries_for_files(
+    files: list[dict[str, str]], requested: list[str] | None,
+) -> list[str]:
+    """Return the requested libraries plus catalog-backed header dependencies."""
+    libraries = list(requested or [])
+    includes = {
+        line.split("<", 1)[1].split(">", 1)[0].strip()
+        for file in files
+        for line in file.get("content", "").splitlines()
+        if "#include <" in line and ">" in line
+    }
+    for header, requirements in _HEADER_LIBRARY_REQUIREMENTS.items():
+        if header in includes:
+            for requirement in requirements:
+                if requirement not in libraries:
+                    libraries.append(requirement)
+    return libraries
+
+
+async def _install_libraries(libraries: list[str]) -> dict[str, Any] | None:
+    """Install declared libraries before compile; return the first failure."""
+    for library in libraries:
+        result = await _arduino.install_library(library)
+        if not result.get("success"):
+            return {
+                "success": False,
+                "error": result.get("error", f"Could not install {library}"),
+                "stdout": result.get("stdout", ""),
+                "stderr": result.get("stderr", ""),
+            }
+    return None
+
 # ---------------------------------------------------------------------------
 # compile_project
 # ---------------------------------------------------------------------------
@@ -62,6 +104,11 @@ async def compile_project(
         "Arduino board FQBN, e.g. 'arduino:avr:uno' or 'rp2040:rp2040:rpipico'. "
         "Defaults to 'arduino:avr:uno'.",
     ] = "arduino:avr:uno",
+    libraries: Annotated[
+        list[str] | None,
+        "Optional Arduino library names. Known catalog-backed dependencies are "
+        "also inferred from #include headers.",
+    ] = None,
 ) -> dict[str, Any]:
     """
     Compile one or more Arduino sketch files and return the compiled artifact.
@@ -85,7 +132,15 @@ async def compile_project(
             }
 
     try:
-        result = await _arduino.compile(files, board)
+        resolved_libraries = _libraries_for_files(files, libraries)
+        install_error = await _install_libraries(resolved_libraries)
+        if install_error is not None:
+            return install_error
+        result = await _arduino.compile(
+            files,
+            board,
+            allowed_libraries=set(resolved_libraries) or None,
+        )
         return result
     except Exception as exc:  # pragma: no cover
         return {
@@ -108,6 +163,11 @@ async def run_project(
         "List of source files (same format as compile_project).",
     ],
     board: Annotated[str, "Board FQBN (default: 'arduino:avr:uno')."] = "arduino:avr:uno",
+    libraries: Annotated[
+        list[str] | None,
+        "Optional Arduino library names; known catalog-backed dependencies are "
+        "inferred from #include headers.",
+    ] = None,
 ) -> dict[str, Any]:
     """
     Compile the project and return simulation-ready artifacts.
@@ -118,7 +178,7 @@ async def run_project(
 
     Returns the same payload as compile_project plus a 'simulation_ready' flag.
     """
-    result = await compile_project(files=files, board=board)
+    result = await compile_project(files=files, board=board, libraries=libraries)
     result["simulation_ready"] = result.get("success", False)
     return result
 
@@ -546,6 +606,9 @@ async def apply_assembly_archetype(
     spec = _archetype_spec(archetype_id)
     if overrides:
         spec = _deep_merge(spec, overrides)
+    error = _assembly_spec_error(spec)
+    if error:
+        return {"ok": False, "error": error}
 
     return {
         "ok": True,
@@ -585,6 +648,9 @@ async def set_assembly_spec(
     kin = spec.get("kinematics")
     if not kin or not isinstance(kin, dict) or not kin.get("model"):
         return {"ok": False, "error": "spec.kinematics.model is required (e.g. 'differential_drive', 'inverted_pendulum', 'quadcopter', 'mecanum', 'static')."}
+    error = _assembly_spec_error(spec)
+    if error:
+        return {"ok": False, "error": error}
     return {
         "ok": True,
         "spec": spec,
@@ -606,6 +672,45 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
         else:
             out[k] = copy.deepcopy(v)
     return out
+
+
+def _assembly_spec_error(spec: dict[str, Any]) -> str | None:
+    models = {"differential_drive", "inverted_pendulum", "mecanum", "quadcopter", "hexacopter", "static"}
+    roles = {
+        "motor_left", "motor_right", "motor_fl", "motor_fr", "motor_rl", "motor_rr",
+        "motor_1", "motor_2", "motor_3", "motor_4", "motor_5", "motor_6",
+        "wheel_left", "wheel_right", "caster_front", "caster_back", "imu", "battery",
+        "controller", "sensor_front", "sensor_back", "sensor_left", "sensor_right", "passenger",
+    }
+    model = spec.get("kinematics", {}).get("model")
+    if model not in models:
+        return f"Unsupported kinematics model '{model}'."
+
+    def finite_vector(value: Any, name: str) -> str | None:
+        if not isinstance(value, dict) or not all(isinstance(value.get(axis), (int, float)) and math.isfinite(value[axis]) for axis in ("x", "y", "z")):
+            return f"{name} must contain finite numeric x, y, and z values."
+        return None
+
+    if "origin" in spec:
+        error = finite_vector(spec["origin"], "origin")
+        if error:
+            return error
+    if "rotYDeg" in spec and (not isinstance(spec["rotYDeg"], (int, float)) or not math.isfinite(spec["rotYDeg"])):
+        return "rotYDeg must be a finite number of degrees."
+    chassis = spec.get("chassis")
+    if chassis is None:
+        return None
+    if not isinstance(chassis, dict) or not isinstance(chassis.get("mounts"), list):
+        return "chassis.mounts must be an array when chassis is provided."
+    for mount in chassis["mounts"]:
+        if not isinstance(mount, dict) or mount.get("role") not in roles:
+            return "chassis.mounts contains an unknown mount role."
+        error = finite_vector(mount.get("at"), f"mount {mount.get('role')}.at")
+        if error:
+            return error
+        if "rotY" in mount and (not isinstance(mount["rotY"], (int, float)) or not math.isfinite(mount["rotY"])):
+            return f"mount {mount.get('role')}.rotY must be a finite number of degrees."
+    return None
 
 
 def _archetype_spec(arch: str) -> dict[str, Any]:

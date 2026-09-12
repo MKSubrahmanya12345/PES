@@ -153,3 +153,36 @@ export interface AssemblySpec {
 export const EMPTY_ASSEMBLY: AssemblySpec = {
   kinematics: { model: 'static' },
 };
+
+const ASSEMBLY_ROLES = new Set<MountPoint['role']>([
+  'motor_left', 'motor_right', 'motor_fl', 'motor_fr', 'motor_rl', 'motor_rr',
+  'motor_1', 'motor_2', 'motor_3', 'motor_4', 'motor_5', 'motor_6',
+  'wheel_left', 'wheel_right', 'caster_front', 'caster_back', 'imu', 'battery',
+  'controller', 'sensor_front', 'sensor_back', 'sensor_left', 'sensor_right',
+  'passenger',
+]);
+
+const KINEMATICS_MODELS = new Set<KinematicsModel>([
+  'differential_drive', 'inverted_pendulum', 'mecanum', 'quadcopter', 'hexacopter', 'static',
+]);
+
+function finite(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+/** Reject malformed agent output before it can mutate simulator transforms. */
+export function isAssemblySpec(value: unknown): value is AssemblySpec {
+  if (!value || typeof value !== 'object') return false;
+  const spec = value as Partial<AssemblySpec>;
+  const model = spec.kinematics?.model;
+  if (!model || !KINEMATICS_MODELS.has(model)) return false;
+  if (spec.origin && (!finite(spec.origin.x) || !finite(spec.origin.y) || !finite(spec.origin.z))) return false;
+  if (spec.rotYDeg !== undefined && !finite(spec.rotYDeg)) return false;
+  const mounts = spec.chassis?.mounts;
+  if (!mounts) return true;
+  return mounts.every((mount) => (
+    ASSEMBLY_ROLES.has(mount.role) &&
+    finite(mount.at.x) && finite(mount.at.y) && finite(mount.at.z) &&
+    (mount.rotY === undefined || finite(mount.rotY))
+  ));
+}

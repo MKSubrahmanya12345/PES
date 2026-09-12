@@ -18,7 +18,6 @@
 import { useFrame } from '@react-three/fiber';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
-import { rotYOfInstance } from '../placement';
 import { usePartRenderStore } from '../../store/usePartRenderStore';
 import { useSimulatorStore } from '../../store/useSimulatorStore';
 import { buildChassis } from '../chassisParametric';
@@ -26,6 +25,7 @@ import { getArchetype, listArchetypes } from '../assembly/archetypes';
 import { stepChassis, type ChassisPose, type MotorInput } from '../assembly/kinematics';
 import {
   EMPTY_ASSEMBLY,
+  isAssemblySpec,
   type AssemblySpec,
 } from '../assembly/assemblyTypes';
 
@@ -55,6 +55,7 @@ function isController(metadataId: string): boolean {
 }
 function isBlade(metadataId: string): boolean { return /propeller|\bblade\b/.test(metadataId.toLowerCase()); }
 function dist2D(a: { x: number; z: number }, b: { x: number; z: number }): number { return Math.hypot(a.x - b.x, a.z - b.z); }
+function radToDeg(radians: number): number { return (radians * 180) / Math.PI; }
 
 function inferArchetypeFromParts(
   counts: { motors: number; wheels: number; casters: number; imus: number; blades: number },
@@ -105,23 +106,31 @@ function resolveBindings(spec: AssemblySpec, components: ComponentLike[]): Map<s
     assign(mp.role, pickFrom(motors, (m) => m.metadataId.toLowerCase().includes(side)) ?? pickFrom(motors));
   }
 
-  // Wheels: attach to nearest motor in 2D (using last known positions).
+  // Wheels follow their matching motor mount. Only use the 2D distance as a
+  // deterministic tie-breaker when an explicit side label is unavailable;
+  // assembly specs are the source of truth for the physical relationship.
   for (const mp of spec.chassis?.mounts ?? []) {
     if (!mp.role.startsWith('wheel_') || roleToId.has(mp.role)) continue;
     const motorRole = mp.role.replace('wheel_', 'motor_');
     const motorId = roleToId.get(motorRole);
-    if (!motorId) continue;
-    const motorCmp = components.find((c) => c.id === motorId);
-    if (!motorCmp) continue;
-    const mx = (motorCmp.properties?.x3d as number) ?? motorCmp.x ?? 0;
-    const mz = (motorCmp.properties?.z3d as number) ?? 0;
+    const side = mp.role.endsWith('_left') ? 'left' : mp.role.endsWith('_right') ? 'right' : null;
+    const sideCandidates = side
+      ? wheels.filter((wheel) => !taken.has(wheel.id) && String(wheel.properties?.side ?? '').toLowerCase() === side)
+      : [];
+    if (sideCandidates.length === 1) {
+      assign(mp.role, sideCandidates[0]?.id);
+      continue;
+    }
+    const motorCmp = motorId ? components.find((c) => c.id === motorId) : undefined;
+    const mx = Number(motorCmp?.properties?.x3d ?? motorCmp?.x ?? 0);
+    const mz = Number(motorCmp?.properties?.z3d ?? 0);
     let bestId: string | undefined, bestD = Infinity;
     for (const w of wheels) {
       if (taken.has(w.id)) continue;
-      const wx = (w.properties?.x3d as number) ?? w.x ?? 0;
-      const wz = (w.properties?.z3d as number) ?? 0;
+      const wx = Number(w.properties?.x3d ?? w.x ?? 0);
+      const wz = Number(w.properties?.z3d ?? 0);
       const d = dist2D({ x: mx, z: mz }, { x: wx, z: wz });
-      if (d < bestD) { bestD = d; bestId = w.id; }
+      if (d < bestD || (d === bestD && w.id < (bestId ?? ''))) { bestD = d; bestId = w.id; }
     }
     assign(mp.role, bestId);
   }
@@ -172,6 +181,7 @@ let currentSpec: AssemblySpec = EMPTY_ASSEMBLY;
 const specListeners = new Set<(s: AssemblySpec) => void>();
 
 export function setAssemblySpec(spec: AssemblySpec): void {
+  if (!isAssemblySpec(spec)) return;
   currentSpec = spec;
   for (const l of specListeners) l(structuredClone(spec));
 }
@@ -248,12 +258,19 @@ export function LiveGround(): JSX.Element | null {
           x3d: origin.x + mount.at.x,
           y3d: origin.y + mount.at.y,
           z3d: origin.z + mount.at.z,
-          rotY: ((mount.rotY ?? 0) + (spec.rotYDeg ?? 0)) * Math.PI / 180,
+          // placement.ts reads rotY as degrees because the value is persisted
+          // through diagram.json. Keep the store contract in degrees here.
+          rotY: (mount.rotY ?? 0) + (spec.rotYDeg ?? 0),
         });
       }
       const existingChassis = components.find((c) => c.metadataId.toLowerCase().includes('chassis'));
       if (existingChassis) {
-        patches.set(existingChassis.id, { x3d: origin.x, y3d: origin.y, z3d: origin.z, rotY: rotY0 });
+        patches.set(existingChassis.id, {
+          x3d: origin.x,
+          y3d: origin.y,
+          z3d: origin.z,
+          rotY: spec.rotYDeg ?? 0,
+        });
       }
       useSimulatorStore.setState((s) => ({
         components: (s.components as ComponentLike[]).map((c) => {
@@ -321,21 +338,21 @@ export function LiveGround(): JSX.Element | null {
         p.x3d = worldX;
         p.z3d = worldZ;
         p.y3d = wheelLike ? cy + mp.at.y : worldY;
-        p.rotY = cRotY + mp.rotY;
+        p.rotY = radToDeg(cRotY + mp.rotY);
         (p as Record<string, unknown>).rotZ = wheelLike ? 0 : tilt;
       } else if (isAir) {
         // For drones everything hangs below origin, no tilt yet.
         p.x3d = cx + Math.sin(cRotY) * mp.at.x - Math.cos(cRotY) * mp.at.z;
         p.z3d = cz + Math.cos(cRotY) * mp.at.x + Math.sin(cRotY) * mp.at.z;
         p.y3d = cy + mp.at.y;
-        p.rotY = cRotY + mp.rotY;
+        p.rotY = radToDeg(cRotY + mp.rotY);
         (p as Record<string, unknown>).rotZ = 0;
       } else {
         // Differential / mecanum / static.
         p.x3d = cx + Math.sin(cRotY) * mp.at.x - Math.cos(cRotY) * mp.at.z;
         p.z3d = cz + Math.cos(cRotY) * mp.at.x + Math.sin(cRotY) * mp.at.z;
         p.y3d = cy + mp.at.y;
-        p.rotY = cRotY + mp.rotY;
+        p.rotY = radToDeg(cRotY + mp.rotY);
         (p as Record<string, unknown>).rotZ = 0;
       }
     }
@@ -364,8 +381,8 @@ export function LiveGround(): JSX.Element | null {
       if (!ev.data || typeof ev.data !== 'object') return;
       const t = (ev.data as Record<string, unknown>).type;
       if (t === 'wireup:set_assembly') {
-        const spec = (ev.data as Record<string, unknown>).spec as AssemblySpec | undefined;
-        if (spec) setAssemblySpec(spec);
+        const spec = (ev.data as Record<string, unknown>).spec;
+        if (isAssemblySpec(spec)) setAssemblySpec(spec);
       } else if (t === 'wireup:apply_archetype') {
         const arch = (ev.data as Record<string, unknown>).archetype as string;
         const overrides = ((ev.data as Record<string, unknown>).overrides ?? {}) as Partial<AssemblySpec>;
