@@ -14,7 +14,7 @@
  */
 
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { useCallback, useMemo, useState, type ReactNode } from 'react';
 
 import type { AgentEvent } from '@/types/generation';
@@ -30,7 +30,7 @@ import { DrawerVeil, HumanDrawers, type DrawerSide } from './HumanDrawers';
 
 const TABS = [
   { href: '', label: 'Overview', short: 'Overview' },
-  { href: '/everflow', label: 'Everflow', short: 'Everflow' },
+  { href: '/everflow', label: 'Project map', short: 'Map' },
   { href: '/parts', label: 'Parts & BOM', short: 'Parts' },
   { href: '/wiring', label: 'Wiring & Pins', short: 'Wiring' },
   { href: '/diagram', label: 'Diagram & Simulator', short: 'Diagram' },
@@ -40,8 +40,84 @@ const TABS = [
   { href: '/quality', label: 'Check & fix', short: 'Check' },
 ] as const;
 
+/* -------------------------------------------------------------------------- */
+/* Goal status chip — the everflow loop, visible on every tab.                */
+/* Data is already in the hub stream (project.everflow.evaluation); no        */
+/* extra fetch. States: building · in flight · waiting on you · done.         */
+/* -------------------------------------------------------------------------- */
+
+function GoalRing({ pct, size, tone }: { pct: number; size: number; tone: 'work' | 'wait' | 'done' }) {
+  const stroke = 2.5;
+  const r = (size - stroke) / 2;
+  const c = 2 * Math.PI * r;
+  return (
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="goal-ring" aria-hidden="true">
+      <circle cx={size / 2} cy={size / 2} r={r} className="goal-ring__track" strokeWidth={stroke} />
+      <circle
+        cx={size / 2}
+        cy={size / 2}
+        r={r}
+        className={`goal-ring__fill goal-ring__fill--${tone}`}
+        strokeWidth={stroke}
+        strokeDasharray={c}
+        strokeDashoffset={c * (1 - Math.min(100, Math.max(0, pct)) / 100)}
+        transform={`rotate(-90 ${size / 2} ${size / 2})`}
+      />
+    </svg>
+  );
+}
+
+function GoalChip({
+  project,
+  inProgress,
+  intake,
+  openAsks,
+  onOpen,
+}: {
+  project: ProjectState | null;
+  inProgress: boolean;
+  intake: boolean;
+  openAsks: number;
+  onOpen: () => void;
+}) {
+  if (intake || !project) return null;
+  const evaluation = project.everflow?.evaluation ?? null;
+  const pct = evaluation ? Math.round((evaluation.completion ?? 0) * 100) : 0;
+
+  let tone: 'work' | 'wait' | 'done';
+  let label: string;
+  if (inProgress) {
+    tone = 'work';
+    label = evaluation ? `building · ${pct}%` : 'building';
+  } else if (!evaluation) {
+    return null;
+  } else if (evaluation.done) {
+    tone = 'done';
+    label = 'all goals met';
+  } else if (evaluation.blockedOnHuman || openAsks > 0) {
+    tone = 'wait';
+    label = `${pct}% · ${openAsks} ${openAsks === 1 ? 'needs' : 'need'} you`;
+  } else {
+    tone = 'work';
+    label = `${pct}% · pass ${evaluation.pass ?? 0}`;
+  }
+
+  return (
+    <button
+      type="button"
+      className={`goal-chip goal-chip--${tone}`}
+      onClick={onOpen}
+      title="Where every goal in the project stands — opens the project map"
+    >
+      <GoalRing pct={evaluation ? pct : 0} size={16} tone={tone} />
+      <span>{label}</span>
+    </button>
+  );
+}
+
 export function ProjectHub({ projectId, initial, children }: { projectId: string; initial: ProjectState; children: ReactNode }) {
   const pathname = usePathname();
+  const router = useRouter();
   const stream = useProjectStream(projectId, initial);
   const [details, setDetails] = useState(false);
   const [drawer, setDrawer] = useState<DrawerSide | null>(null);
@@ -80,6 +156,22 @@ export function ProjectHub({ projectId, initial, children }: { projectId: string
       ? 'We ran into a problem while building. The run log has the details.'
       : 'Everything is ready below.';
 
+  /* The living line under the build steps: the goal loop keeps going after
+     the six steps are all done — so the page never visually freezes. */
+  const loopEvaluation = project?.everflow?.evaluation ?? null;
+  const loopPct = loopEvaluation ? Math.round((loopEvaluation.completion ?? 0) * 100) : 0;
+  const loopLine = isIntake(status)
+    ? null
+    : inProgress
+      ? { tone: 'work' as const, text: 'loop · the goal map comes online when the first build finishes' }
+      : loopEvaluation
+        ? loopEvaluation.done
+          ? { tone: 'done' as const, text: 'loop · every goal met — the agent has nothing left to do' }
+          : openAsks > 0 || loopEvaluation.blockedOnHuman
+            ? { tone: 'wait' as const, text: `loop · pass ${loopEvaluation.pass} · ${loopPct}% of goals met · ${openAsks} ${openAsks === 1 ? 'ask needs' : 'asks need'} you` }
+            : { tone: 'work' as const, text: `loop · pass ${loopEvaluation.pass} · ${loopPct}% of goals met · the agent is working the rest` }
+        : null;
+
   return (
     <HubContext.Provider value={value}>
       <header className="topbar">
@@ -93,6 +185,19 @@ export function ProjectHub({ projectId, initial, children }: { projectId: string
           <span className="hub__crumb-divider" aria-hidden="true" />
           {project?.name ?? 'Project'}
           {details ? <span className="faint mono-sm">{project?.id}</span> : null}
+          <GoalChip
+            project={project}
+            inProgress={inProgress}
+            intake={isIntake(status)}
+            openAsks={openAsks}
+            onOpen={() => {
+              if (openAsks > 0) {
+                setDrawer((current) => (current === 'left' ? null : 'left'));
+              } else if (project) {
+                router.push(`${base}/everflow`);
+              }
+            }}
+          />
         </span>
 
         <span className="topbar__spacer" />
@@ -126,9 +231,9 @@ export function ProjectHub({ projectId, initial, children }: { projectId: string
             type="button"
             className={`btn btn--sm${drawer === 'right' ? ' btn--on' : ''}`}
             onClick={() => setDrawer((current) => (current === 'right' ? null : 'right'))}
-            title="Add a note, idea, correction, resource or steer mid-thought"
+            title="Add a note, idea, correction, resource or steer — the agent reads it on the next pass"
           >
-            mid-thought
+            add to agent
           </button>
 
           <button type="button" className="btn btn--sm" onClick={toggleDetails} title="Show internal ids, provenance and raw data">
@@ -166,15 +271,35 @@ export function ProjectHub({ projectId, initial, children }: { projectId: string
               </li>
             ))}
           </ol>
+          {loopLine ? (
+            <Link href={`${base}/everflow`} className={`hub__loopline hub__loopline--${loopLine.tone}`} title="Open the project map">
+              {loopLine.text}
+            </Link>
+          ) : null}
         </div>
       </div>
 
       <nav className="hub__nav" aria-label="Project sections">
         {TABS.map((tab) => {
           const active = activeHref === tab.href;
+          const evaluation = project?.everflow?.evaluation ?? null;
+          const mapBadge =
+            tab.href === '/everflow' && !isIntake(status)
+              ? openAsks > 0
+                ? { tone: 'wait' as const, text: String(openAsks) }
+                : evaluation?.done
+                  ? { tone: 'done' as const, text: '✓' }
+                  : null
+              : null;
           return (
-            <Link key={tab.href} href={`${base}${tab.href}`} className={`hub__tab${active ? ' hub__tab--active' : ''}`}>
+            <Link
+              key={tab.href}
+              href={`${base}${tab.href}`}
+              className={`hub__tab${active ? ' hub__tab--active' : ''}`}
+              title={tab.href === '/everflow' ? 'The project map — every goal, what is proven, and what the agent needs from you' : undefined}
+            >
               {tab.label.replace('&', '\u00a0&')}
+              {mapBadge ? <span className={`hub__tab-badge hub__tab-badge--${mapBadge.tone}`}>{mapBadge.text}</span> : null}
             </Link>
           );
         })}

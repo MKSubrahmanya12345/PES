@@ -8,6 +8,9 @@
 
 import Link from 'next/link';
 
+import type { GoalEvaluation } from '@/types/everflow';
+
+import { BriefLines } from '@/components/everflow/BriefLines';
 import { projectOverview, humanStageLabel } from '@/lib/project-presentation';
 import { Badge, Card, Notice } from '../ui';
 import { BuildPackButton } from '../BuildPackButton';
@@ -15,7 +18,198 @@ import { HardwareCopilot } from '../HardwareCopilot';
 import { ProjectAtlas } from '../ProjectAtlas';
 import { useHub } from '../hub-context';
 
+/* -------------------------------------------------------------------------- */
+/* Where your project stands — the everflow loop, in plain language.          */
+/* Renders on the hook page: completion, the promises as a checklist,         */
+/* guesses, and the one CTA (answer the agent / open the project map).        */
+/* -------------------------------------------------------------------------- */
+
+const GOAL_VERDICT: Record<string, { word: string; tone: string }> = {
+  satisfied: { word: 'met', tone: 'ok' },
+  blocked_human: { word: 'needs you', tone: 'warn' },
+  in_progress: { word: 'in flight', tone: 'info' },
+  waived: { word: 'waived', tone: 'muted' },
+  open: { word: 'open', tone: 'warn' },
+};
+
+function goalVerdict(result: GoalEvaluation) {
+  return GOAL_VERDICT[result.goal.state] ?? GOAL_VERDICT.open;
+}
+
+/**
+ * How a met goal was proven — read from the evaluator's own evidence words,
+ * so the summary can never claim a proof the record doesn't contain.
+ */
+function proofOf(result: GoalEvaluation): 'emulator' | 'you' | 'engine' {
+  const evidence = result.evidence;
+  if (/behavioural evaluator|emulator|proven by/i.test(evidence)) return 'emulator';
+  if (/human|confirmed by you|doubt \w+:/i.test(evidence)) return 'you';
+  return 'engine';
+}
+
+function GoalStandCard() {
+  const { project, running } = useHub();
+  if (!project || project.status === 'failed') return null;
+
+  const evaluation = project.everflow?.evaluation ?? null;
+  const openAsks = (project.humanTasks ?? []).filter((task) => task.direction === 'ai_to_human' && task.status === 'open').length;
+  const mapHref = `/project/${project.id}/everflow`;
+
+  if (!evaluation) {
+    return (
+      <Card title="Where your project stands" wide>
+        <div className="mapcard__pending">
+          <span className="dot dot--live" />
+          <p>
+            The goal map comes online when the first build finishes — from then on the agent keeps a visible
+            scoreboard: every goal, what is proven, and what it needs from you.
+          </p>
+        </div>
+      </Card>
+    );
+  }
+
+  const pct = Math.round(evaluation.completion * 100);
+  const goals = evaluation.results.filter((result) => result.kind === 'goal');
+  const shownGoals = goals.slice(0, 6);
+  const extraGoals = goals.length - shownGoals.length;
+  const guesses = evaluation.results.filter((result) => result.kind === 'assumption' && !result.satisfied).slice(0, 3);
+  const openEnds = evaluation.totals.openEnds;
+  const metGoals = goals.filter((result) => result.satisfied);
+  const proofCounts = metGoals.reduce(
+    (acc, result) => {
+      acc[proofOf(result)] += 1;
+      return acc;
+    },
+    { emulator: 0, you: 0, engine: 0 },
+  );
+
+  const statusLine = evaluation.done
+    ? 'Every goal is met — the agent has nothing left to close.'
+    : evaluation.blockedOnHuman || openAsks > 0
+      ? `Parked on you — ${openAsks} ${openAsks === 1 ? 'ask' : 'asks'} the agent can't close alone. It keeps the record and never waits in silence.`
+      : `In flight — ${pct}% of goals met. The agent keeps working on the rest, and asks only for what it can't.`;
+  const tone: 'done' | 'wait' | 'work' = evaluation.done
+    ? 'done'
+    : evaluation.blockedOnHuman || openAsks > 0
+      ? 'wait'
+      : 'work';
+
+  return (
+    <Card
+      title="Where your project stands"
+      count={`pass ${evaluation.pass}`}
+      wide
+      footer={
+        <div className="mapcard__foot">
+          <span className="mapcard__foot-note">
+            {openAsks > 0
+              ? `${openAsks} ${openAsks === 1 ? 'thing' : 'things'} need your answer`
+              : evaluation.done
+                ? 'nothing needs you'
+                : 'nothing parked on you right now'}
+          </span>
+          <Link href={mapHref} className="btn btn--sm btn--primary">
+            {openAsks > 0 ? 'Answer the agent →' : 'Open the project map →'}
+          </Link>
+        </div>
+      }
+    >
+      <div className="mapcard">
+        <div className="mapcard__top">
+          <span className="mapcard__ring" aria-hidden="true">
+            <svg width="46" height="46" viewBox="0 0 46 46">
+              <circle cx="23" cy="23" r="19" className="goal-ring__track" strokeWidth="4" />
+              <circle
+                cx="23"
+                cy="23"
+                r="19"
+                className={`goal-ring__fill goal-ring__fill--${tone}`}
+                strokeWidth="4"
+                strokeDasharray={2 * Math.PI * 19}
+                strokeDashoffset={2 * Math.PI * 19 * (1 - pct / 100)}
+                transform="rotate(-90 23 23)"
+              />
+              <text x="23" y="23" className="mapcard__ring-pct" textAnchor="middle" dominantBaseline="central">
+                {pct}%
+              </text>
+            </svg>
+          </span>
+          <p className="mapcard__status">{statusLine}</p>
+        </div>
+
+        {shownGoals.length > 0 ? (
+          <div className="mapcard__goals">
+            <span className="mapcard__label">promises — what it must do</span>
+            <ul className="mapcard__goal-list">
+              {shownGoals.map((result) => {
+                const verdict = goalVerdict(result);
+                return (
+                  <li key={result.nodeId} className={`mapcard__goal mapcard__goal--${verdict.tone}`} title={result.evidence}>
+                    <span className="mapcard__goal-dot" aria-hidden="true" />
+                    <span className="mapcard__goal-label">{result.label}</span>
+                    <span className="mapcard__goal-verdict">{verdict.word}</span>
+                  </li>
+                );
+              })}
+            </ul>
+            {extraGoals > 0 ? <span className="mapcard__more">+ {extraGoals} more on the map</span> : null}
+          </div>
+        ) : null}
+
+        {guesses.length > 0 ? (
+          <p className="mapcard__guesses">
+            It is guessing on: <strong>{guesses.map((guess) => guess.label).join(', ')}</strong>
+            {guesses.length === 3 && evaluation.results.filter((r) => r.kind === 'assumption' && !r.satisfied).length > 3 ? ' …' : ''} — a
+            guess stays visible until you confirm it.
+          </p>
+        ) : null}
+
+        {openEnds > 0 && !evaluation.done ? (
+          <p className="mapcard__openends">
+            {openEnds} {openEnds === 1 ? 'goal' : 'goals'} {openEnds === 1 ? 'has' : 'have'} no one working on them yet — the next pass
+            will.
+          </p>
+        ) : null}
+
+        {evaluation.done && metGoals.length > 0 ? (
+          <div className="mapcard__proof">
+            <span className="mapcard__proof-title">how it was proven</span>
+            <div className="mapcard__proof-grid">
+              <span className="mapcard__proof-cell">
+                <strong>{proofCounts.emulator}</strong> by the emulator
+              </span>
+              <span className="mapcard__proof-cell">
+                <strong>{proofCounts.you}</strong> confirmed by you
+              </span>
+              <span className="mapcard__proof-cell">
+                <strong>{proofCounts.engine}</strong> by the check engine
+              </span>
+            </div>
+            <p className="mapcard__proof-note">
+              Every “met” goal above has a named proof — nothing is marked done on the agent’s say-so.
+            </p>
+          </div>
+        ) : null}
+
+        {evaluation.brief ? (
+          <details className="mapcard__brief-wrap">
+            <summary>the agent's working document</summary>
+            <BriefLines text={evaluation.brief} />
+          </details>
+        ) : null}
+      </div>
+      {running ? (
+        <p className="mapcard__running">
+          <span className="dot dot--live" /> the agent is mid-build — this card updates as each pass lands.
+        </p>
+      ) : null}
+    </Card>
+  );
+}
+
 const LINKS = [
+  { href: 'everflow', label: 'Project map', blurb: 'Every goal, what is proven, what the agent needs from you' },
   { href: 'parts', label: 'Parts & BOM', blurb: 'Every part you need, with why' },
   { href: 'wiring', label: 'Wiring & Pins', blurb: 'The picture of how it connects' },
   { href: 'diagram', label: 'Diagram & Simulator', blurb: 'See it laid out, open it in a simulator' },
@@ -91,6 +285,8 @@ export function OverviewPanel() {
           ) : null}
         </div>
       </Card>
+
+      <GoalStandCard />
 
       {project && !running ? <HardwareCopilot /> : null}
       {project && !running ? <ProjectAtlas /> : null}
