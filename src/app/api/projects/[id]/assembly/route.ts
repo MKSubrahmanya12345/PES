@@ -80,16 +80,27 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 
     const baseSeq = next.events.reduce((max, candidate) => Math.max(max, candidate.seq), 0);
     const seated = Object.keys(result.plan.placements).length + result.plan.parametric.length;
+    const extras = result.plan.parametricRoles?.length ?? 0;
     const event: AgentEvent = {
       seq: baseSeq + 1,
       id: createId('evt'),
       type: 'assembly_replanned',
       status: 'completed',
-      message: `3D shape re-planned as ${result.plan.label} — ${seated} of ${roster.length} part(s) seated (${result.plan.source}).`,
+      message:
+        `3D shape re-planned as ${result.plan.label} — ${seated} of ${roster.length} part(s) seated` +
+        `${extras > 0 ? ` + ${extras} parametric extra(s) (wheels/caster/props)` : ''}` +
+        ` (${result.plan.source}).`,
       timestamp: nowIso(),
       stage: 'assembly',
       durationMs: Date.now() - startedAt,
-      metadata: { archetype: result.plan.archetype, source: result.plan.source, seated, total: roster.length, mode },
+      metadata: {
+        archetype: result.plan.archetype,
+        source: result.plan.source,
+        seated,
+        total: roster.length,
+        ...(extras > 0 ? { parametricExtras: extras } : {}),
+        mode,
+      },
     };
     await appendEvents(state.id, [event]);
 

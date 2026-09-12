@@ -44,6 +44,8 @@ import { nowIso } from '@/lib/validation/time';
 import { normalizeRequirements, understandPrompt } from '@/modules/project-understanding';
 import { formatAnalysisForPrompt } from '@/modules/project-understanding/heuristics';
 import { planHardware } from '@/modules/hardware-planner';
+import { planSoftware } from '@/modules/software-planner';
+import { generateCode } from '@/modules/code-generator';
 import { planAssembly, rosterFromDiagram } from '@/modules/assembly-planner';
 import { runHardwareAgent } from '@/modules/agent';
 import { buildGenerationContext, controllerInfo, type GenerationContext } from './context';
@@ -258,6 +260,62 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineOutput>
   });
 
   const { blackboard } = agentRun;
+
+  /*
+   * The completeness promise, enforced here: a build that reaches validation
+   * ALWAYS carries firmware. The agent runner synthesises a sketch even when
+   * its tools fail, but the old `blackboard.code || { files: [], ... }`
+   * fallback shipped an empty artifact whenever anything slipped past it —
+   * which then failed the CodeArtifact schema AND "no firmware source" in
+   * validation, with a fixer that had no repair for either. Regenerate
+   * deterministically instead; only a genuinely broken catalog skips this.
+   */
+  if (!blackboard.code || blackboard.code.files.length === 0) {
+    const rescueHandle = events.start('code_generation_started', 'Regenerating the firmware the agent left missing...', {
+      stage: 'code',
+    });
+    try {
+      const controllerSel = blackboard.selections.find((s) => s.category === 'microcontroller');
+      const controllerDef = catalog.find((c) => c.id === controllerSel?.componentId);
+      const softwarePlan =
+        blackboard.softwarePlan ??
+        planSoftware({
+          requirements,
+          selections: blackboard.selections,
+          catalog: blackboard.workingCatalog,
+          assignments: blackboard.pinAssignments,
+          serialLinks: blackboard.serialLinks ?? [],
+          i2cBuses: blackboard.i2cBuses ?? [],
+          controllerInstanceId: controllerSel?.instances[0]?.instanceId,
+          controllerComponentId: controllerSel?.componentId,
+          events,
+        });
+      blackboard.softwarePlan = softwarePlan;
+      blackboard.code = await generateCode({
+        projectName,
+        projectSummary: requirements.summary,
+        requirements,
+        selections: blackboard.selections,
+        catalog: blackboard.workingCatalog,
+        assignments: blackboard.pinAssignments,
+        serialLinks: blackboard.serialLinks ?? [],
+        i2cBuses: blackboard.i2cBuses ?? [],
+        softwarePlan,
+        controllerName: controllerDef?.name ?? 'Arduino',
+        revision: 1,
+        prompt: effectivePrompt(base),
+        events,
+      });
+      rescueHandle.complete(`Firmware regenerated deterministically — ${blackboard.code.files.length} file(s).`);
+      notes.push('The agent stage produced no firmware; the sketch was regenerated deterministically before validation.');
+    } catch (error) {
+      const described = describeError(error);
+      rescueHandle.fail(`Firmware regeneration failed: ${described.message} — validation's fix loop will retry.`, described.message, {
+        stage: 'code',
+      });
+      notes.push(`Firmware regeneration failed (${described.message}); validation's fix loop will retry.`);
+    }
+  }
   const selections = blackboard.selections;
   const hardwarePlan: HardwarePlan = blackboard.hardwarePlan || {
     summary: requirements.summary,
@@ -393,13 +451,17 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineOutput>
         });
       }
       const seated = Object.keys(assembly.placements).length + assembly.parametric.length;
+      const extras = assembly.parametricRoles?.length ?? 0;
       assemblyHandle.complete(
-        `Assembled as ${assembly.label} — ${seated} of ${roster.length} part(s) seated (${assembly.source}).`,
+        `Assembled as ${assembly.label} — ${seated} of ${roster.length} part(s) seated` +
+          `${extras > 0 ? ` + ${extras} parametric extra(s) (wheels/caster/props)` : ''}` +
+          ` (${assembly.source}).`,
         {
           archetype: assembly.archetype,
           source: assembly.source,
           seated,
           total: roster.length,
+          ...(extras > 0 ? { parametricExtras: extras } : {}),
           warnings: assembly.warnings.length,
         },
       );
@@ -471,12 +533,29 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineOutput>
 }
 
 /** The model may name the project; otherwise derive one from the goal. */
+/**
+ * A project NAME is not a log line. `truncate()` from validation/json is for
+ * display text (it appends a newline + "… [truncated N characters]"), and
+ * that marker used to land in the name — which then flowed into the sketch
+ * header, string constants and coverage corpora, where the non-ASCII ellipsis
+ * is a firmware compile error. Names are cut cleanly at a word boundary with
+ * a plain ASCII ellipsis instead.
+ */
+function nameTruncate(value: string, max = 80): string {
+  const flat = value.replace(/\s+/g, ' ').trim();
+  if (flat.length <= max) return flat;
+  const cut = flat.slice(0, max);
+  const lastSpace = cut.lastIndexOf(' ');
+  const head = lastSpace > max * 0.6 ? cut.slice(0, lastSpace) : cut;
+  return `${head.replace(/[,;:.\s]+$/, '')}...`;
+}
+
 function pickProjectName(raw: unknown, requirements: ProjectState['requirements'], base: ProjectState): string {
   const record = asRecord(raw);
   const modelName = typeof record.name === 'string' ? record.name.trim() : '';
-  if (modelName.length > 0) return truncate(modelName, 80);
+  if (modelName.length > 0) return nameTruncate(modelName, 80);
   if (base.name && base.name !== 'Untitled project') return base.name;
   const goal = requirements?.goal?.trim();
-  if (goal && goal.length > 0) return truncate(goal.replace(/\.$/, ''), 80);
-  return truncate(base.prompt.split('\n')[0] ?? 'Wireup project', 80);
+  if (goal && goal.length > 0) return nameTruncate(goal.replace(/\.$/, ''), 80);
+  return nameTruncate(base.prompt.split('\n')[0] ?? 'Wireup project', 80);
 }

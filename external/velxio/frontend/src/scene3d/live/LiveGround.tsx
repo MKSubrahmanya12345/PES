@@ -28,6 +28,7 @@ import {
   isAssemblySpec,
   type AssemblySpec,
 } from '../assembly/assemblyTypes';
+import { buildParametricExtras, disposeExtras } from './parametricExtras';
 
 /* ───────────────────────── helpers ─────────────────────────────────────── */
 
@@ -221,6 +222,12 @@ export function LiveGround(): JSX.Element | null {
     return buildChassis(activeSpec.chassis);
   }, [activeSpec.chassis]);
 
+  // Parametric wheels / casters / propellers: the spec's mechanical extras
+  // the (electrical) part roster cannot supply. Built from the spec alone,
+  // shown only for mounts no real part claims, posed every frame below.
+  const extras = useMemo(() => buildParametricExtras(activeSpec), [activeSpec]);
+  useEffect(() => () => disposeExtras(extras), [extras]);
+
   useFrame((_, dtRaw) => {
     const dt = Math.min(0.05, dtRaw);
     const state = useSimulatorStore.getState();
@@ -370,6 +377,36 @@ export function LiveGround(): JSX.Element | null {
       }
     }
 
+    // Parametric extras — wheels, casters, propellers the roster could not
+    // supply. A real part bound to the role always wins; the stand-in hides.
+    // Wheels/casters/props never tilt with the body (balancer wheels stay at
+    // axle height), so the pose is the same "wheelLike" math as bound parts.
+    if (extras.extras.length > 0) {
+      const slotTps = new Map<string, number>(motorsIn.map((m) => [m.slot as string, m.turnsPerSecond]));
+      const hasBlades = components.some((c) => isBlade(c.metadataId));
+      for (const ex of extras.extras) {
+        const occupied = ex.kind === 'prop' ? hasBlades : roleToId.has(ex.role);
+        ex.holder.visible = !occupied;
+        if (occupied) continue;
+        const worldX = cx + Math.sin(cRotY) * ex.at.x - Math.cos(cRotY) * ex.at.z;
+        const worldZ = cz + Math.cos(cRotY) * ex.at.x + Math.sin(cRotY) * ex.at.z;
+        let worldY = cy + ex.at.y + ex.lift;
+        if (ex.kind !== 'prop') worldY = Math.max(worldY, ex.radius); // rest on the bench
+        ex.holder.position.set(worldX, worldY, worldZ);
+        ex.holder.rotation.set(0, cRotY, 0);
+        const tps = ex.slot ? (slotTps.get(ex.slot) ?? 0) : 0;
+        if (ex.kind === 'prop') {
+          // CCW from above for positive thrust; overspun a touch so it reads.
+          ex.spinAngle += tps * Math.PI * 2 * dt * 2;
+          ex.spinner.rotation.y = ex.spinAngle;
+        } else {
+          // +X forward with the axle along +Z ⇒ forward rolls around −Z.
+          ex.spinAngle -= tps * Math.PI * 2 * dt;
+          ex.spinner.rotation.z = ex.spinAngle;
+        }
+      }
+    }
+
     // Apply transform to our chassis mesh directly (it lives in the scene-graph as a React child).
     if (chassisGroupRef.current) {
       chassisGroupRef.current.position.set(cx, cy, cz);
@@ -411,7 +448,12 @@ export function LiveGround(): JSX.Element | null {
   }, []);
 
   if (!chassisMesh) return null;
-  return <primitive object={chassisMesh} ref={chassisGroupRef} />;
+  return (
+    <>
+      <primitive object={chassisMesh} ref={chassisGroupRef} />
+      {extras.extras.length > 0 ? <primitive object={extras.root} /> : null}
+    </>
+  );
 }
 
 

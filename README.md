@@ -70,6 +70,7 @@ Other scripts:
 | `pnpm verify:atlas` | Clones a guitar profile offline, checks stable content addressing, graph IDs, numeric facts, coverage/confidence, Java mappings, a Maven project descriptor and honest unsupported-target behavior |
 | `pnpm verify:llm-codegen` | Proves the AI-first codegen rooting gate offline with canned model plans (good, hallucinated pin, aliased pin, hijacked constant, foreign include, contract breach, provider failure); the happy-path sketch is compiled against the firmware shim. `WIREUP_ENABLE_LLM_CODEGEN=false … --flag-off` also proves the flag disables the stage |
 | `pnpm verify:workbench` | Proves the firmware workbench loop offline: the compile gate, chat turns (applied with revision + diff, answer-only, rooting refusal, compile-fail repair round), manual saves (pin-drift repair, broken-save refusal), and the validator surfacing `firmware_compile_error` |
+| `pnpm verify:self-heal` | Reproduces, with Bedrock unreachable, the four failure classes one real build shipped with — no firmware + a CodeArtifact schema violation, a 9 V PP3 feeding ~3 A of motors (`power_budget_exceeded`), an unimplemented HC-SR04 obstacle stop, and intake transcript junk (`Q: … A (ASSUMPTION …)`) quoted as a requirement — then proves the planner, pipeline, sketch template, prompt sanitiser and fix loop each close their class: the supply is swapped for one sized to the load, the firmware always exists and passes the schema, the sketch implements the obstacle-stop guard, and re-validation comes back clean |
 | `pnpm verify:simulator` | Proves the registry ↔ Velxio simulator link offline: every catalog `supported: true` claim maps to a part the vendored Velxio build actually renders and simulates, every exporter board kind is a real `BoardKind`, the simulation-registry table matches the vendored source, and a synthetic board + all 53 supported peripherals project end-to-end with zero dropped parts or wires. Needs no credentials, no MongoDB and no network |
 | `pnpm export:cad-catalog` | Writes `external/velxio/frontend/public/cad-catalog.json` — the CAD spec (dimensions, body style, every pin's millimetre anchor) for all 108 catalog parts, keyed by the same key the Velxio exporter places them under |
 | `pnpm export:cad-models` | Writes the 3D assets for every catalog key into `external/velxio/frontend/public/models3d/<key>/`: a GLB (named pin-anchor nodes) plus printable `.stl` and `.ascii.stl` exports and a `spec.json`. Idempotent, and a reviewed asset is never overwritten |
@@ -255,6 +256,7 @@ Full design, invariants and the verification harness:
 | `src/modules/code-generator/` | `templates.ts` (deterministic firmware skeleton) and `index.ts` (model output normalisation, pin-map/include marker blocks, entry point selection) |
 | `src/modules/libraries-generator/` | `libraries.json` + per-manager install commands |
 | `src/modules/diagram-generator/` | `layout.ts` (grid layout, pin anchors, wire routing), `index.ts` (`diagram.json`), `wokwi.ts` (projection to the Wokwi format with honest skip reporting) |
+| `src/modules/assembly-planner/` | The 3D product shape: `archetypes.ts` (vehicle tables mirrored in Velxio), `heuristics.ts` (deterministic archetype inference + role binding), `schema.ts` (model proposal: archetype, chassis, mounts, wheel sizing), `resolve.ts` (validate + merge + seat every part; wheels, casters and propellers have no electrical parts, so the scene renders them parametrically from the spec — recorded in `parametricRoles`) |
 | `src/modules/simulation/` | `velxio-key.ts` (the single source of truth for which key a catalog part occupies in the simulator, and which parts have no element at all), `velxio-project.ts` (`.vlx` generator: board, simulated parts, `cad-bench-<catalogId>` CAD bench parts and their wires), `vlx-sync.ts` (canvas → diagram reverse sync), `velxio-parts.ts` (the checked `supported: true` claim table) |
 | `src/modules/instructions-generator/` | `instructions.md`, sections and bill of materials |
 | `src/modules/validator/` | `rules.ts` (deterministic engine, the source of engineering truth), `llm.ts` (critical review that may add but never remove engine findings), `index.ts` |
@@ -449,7 +451,11 @@ reason is recorded in `engineError` and the engine results are still returned.
 project, and re-derives only the dependent artifacts in a fixed order
 (pins → wiring → code → libraries → diagram → instructions). Firmware is edited
 through anchored patches (marker blocks, `find_replace`, include insertion) —
-never rewritten from scratch. Every change is recorded with its id, artifact,
+never rewritten from scratch. A missing or malformed code artifact is the
+exception: it is deterministically rebuilt from the software + pin plan
+(forced `code` re-derivation), and a `power_budget_exceeded` supply is swapped
+for the smallest catalog supply with ≥10% headroom over the re-derived
+sustained load. Every change is recorded with its id, artifact,
 reason, origin and the issue it addresses; rejected changes are recorded too.
 The result is frozen as a new revision, and the loop repeats until validation
 passes or the iteration cap is reached (then the project completes with

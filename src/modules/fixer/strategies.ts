@@ -18,6 +18,7 @@ import { changeId } from '@/lib/validation/ids';
 import { reassignPin } from '@/modules/pin-planner';
 import { normaliseMcuPin, pinSpec, usablePins } from '@/modules/pin-planner/mcu-profiles';
 import { ROLE_BY_CATEGORY } from '@/modules/hardware-planner';
+import { computePowerBudget, selectSupply } from '@/modules/hardware-planner/power';
 import { braceBalance } from '@/modules/code-generator';
 import { evaluateQuantityDelivery } from '@/modules/validator/quantities';
 
@@ -1406,12 +1407,100 @@ function planForIssue(ctx: Ctx, issue: ValidationIssue): void {
       giveUp(ctx, issue, 'Only a human (or a fresh 3D re-plan) can judge the intended layout.');
       return;
 
-    case 'schema_violation':
+    /*
+     * A missing or malformed CODE artifact has a deterministic repair: the
+     * sketch is fully re-derivable from the software plan + pin plan, and the
+     * code refresher's `force` path regenerates exactly that. The old
+     * behaviour gave up here, so a build that lost its firmware ("No firmware
+     * source was generated" + the schema violation on the empty artifact)
+     * shipped both errors with nothing in the loop willing to act.
+     */
     case 'empty_artifact':
+    case 'schema_violation': {
+      if (issue.domain === 'code') {
+        rerunForced(
+          ctx,
+          issue,
+          'code',
+          'The firmware artifact is missing or malformed — rebuilt deterministically from the software plan and pin plan.',
+        );
+        return;
+      }
+      giveUp(ctx, issue, 'No deterministic patch exists for this issue code — it needs a model proposal or a human decision.');
+      return;
+    }
+
+    /*
+     * The power budget named the shortfall; the repair is a supply that can
+     * actually deliver it. The sustained load is re-derived from the same
+     * budget engine (never parsed from the message), the smallest catalog
+     * supply with ≥10% headroom over it wins, and everything that depends on
+     * the supply (budget, wiring, diagram, instructions) is re-derived. When
+     * no catalog supply is big enough the issue stays unresolved — honestly,
+     * because guessing a battery that also fails helps nobody.
+     */
+    case 'power_budget_exceeded': {
+      /* The budget engine wants the controller *selection* (with instances). */
+      const controllerComponentId = ctx.project.hardwarePlan?.controller?.componentId;
+      const controller = controllerComponentId
+        ? ctx.project.components.find((selection) => selection.componentId === controllerComponentId) ?? null
+        : null;
+      const budget = computePowerBudget({
+        selections: ctx.project.components,
+        catalog: ctx.catalog,
+        controller,
+        ...(ctx.profile ? { profile: ctx.profile } : {}),
+      });
+      const neededMa = budget.sustainedPeakMa ?? 0;
+      if (neededMa <= 0) {
+        giveUp(ctx, issue, 'The sustained load could not be re-derived from the current design.');
+        return;
+      }
+      const supply = selectSupply(ctx.project.components, ctx.catalog);
+      if (!supply) {
+        giveUp(ctx, issue, 'No power supply selection exists to upgrade — a supply must be chosen first.');
+        return;
+      }
+      const targetMa = Math.ceil(neededMa * 1.1);
+      const candidates = ctx.catalog
+        .filter((component) => component.category === 'power' && component.powerSourceRequirements?.outputVoltage !== undefined)
+        .filter((component) => (component.powerSourceRequirements?.maxCurrentMa ?? 0) >= targetMa)
+        .filter((component) => component.id !== supply.componentId)
+        .filter((component) => component.metadata.unsuitableForMotors !== true || neededMa <= 300)
+        .sort(
+          (a, b) =>
+            (a.powerSourceRequirements?.maxCurrentMa ?? 0) - (b.powerSourceRequirements?.maxCurrentMa ?? 0) ||
+            (a.powerSourceRequirements?.outputVoltage ?? 0) - (b.powerSourceRequirements?.outputVoltage ?? 0),
+        );
+      const replacement = candidates[0];
+      if (!replacement) {
+        giveUp(
+          ctx,
+          issue,
+          `No catalog supply can deliver the sustained ~${neededMa} mA load — the design must shed loads or the operator must pick a bigger supply.`,
+        );
+        return;
+      }
+      const replaced = push(ctx, issue, {
+        artifact: 'components',
+        op: 'replace_component',
+        selectionId: supply.id,
+        componentId: replacement.id,
+        quantity: 1,
+        role: 'power',
+        reason: `The sustained load is ~${neededMa} mA and ${supply.name} cannot deliver it; ${replacement.name} (${replacement.powerSourceRequirements?.maxCurrentMa ?? '?'} mA) covers it with headroom.`,
+      });
+      if (replaced) {
+        rerun(ctx, issue, 'wiring', 'The supply rails and power wiring must be re-derived for the new supply.');
+        rerun(ctx, issue, 'diagram', 'The diagram must show the new supply.');
+        rerun(ctx, issue, 'instructions', 'The guide must cover the new supply.');
+      }
+      return;
+    }
+
     case 'missing_controller':
     case 'incompatible_components':
     case 'invalid_voltage':
-    case 'power_budget_exceeded':
     case 'requirement_uncovered':
     case 'duplicate_instance_id':
     case 'model_review':

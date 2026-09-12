@@ -54,6 +54,29 @@ extras) are deck-stacked around the seated parts and emitted as
 `passenger_0…passenger_7` mounts + bindings, so the chassis carries them when
 it drives. Beyond 8 followers the rest stay where the build baked them.
 
+## Parametric extras — wheels, casters, propellers
+
+The catalog is electrical: it contains no wheels, no casters, no propellers,
+so those mounts would sit empty and the "car" would render as a deck with
+motors. They are instead drawn **on the spot** as parametric stand-ins
+(`scene3d/live/parametricExtras.ts`):
+
+- every `wheel_*` mount with no bound part renders a wheel built from
+  `spec.wheel` — tire, hub and tread pads, resting on the bench, spinning
+  with its motor slot's live speed;
+- every unbound `caster_*` mount renders a caster ball + bracket;
+- on quadcopters/hexacopters every `motor_*` mount renders a propeller
+  (disc diameter = `spec.wheel.diameterMm`) unless real propeller parts are
+  present.
+
+Rough geometry is fine — present beats perfect. A real part bound to the
+role always wins and LiveGround hides the stand-in that frame. The model
+sizes the extras through the proposal's `wheel` override (⌀20–300 mm, width
+5–120 mm; out-of-range values are dropped with a note), the resolved plan
+records what renders parametrically in `parametricRoles` + `notes`, and the
+event log says it: `… 6 of 8 part(s) seated + 3 parametric extra(s)
+(wheels/caster/props)`.
+
 ## Re-planning and repairs
 
 - `POST /api/projects/[id]/assembly` (`mode: auto | model | heuristic`)

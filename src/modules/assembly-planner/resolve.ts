@@ -155,6 +155,44 @@ function validChassis(raw: AssemblyProposal['chassis'], notes: string[]): Assemb
   };
 }
 
+/**
+ * The parametric extras spec (wheels — or the propeller disc on flying
+ * frames). The archetype default wins unless the model sizes them; anything
+ * out of range is dropped with a note, never silently.
+ */
+function mergeWheelSpec(
+  base: AssemblySpecJson['wheel'],
+  baseId: AssemblyArchetypeId,
+  override: AssemblyProposal['wheel'],
+  notes: string[],
+): AssemblySpecJson['wheel'] {
+  if (baseId === 'static_bench') {
+    if (override && Object.keys(override).length > 0) {
+      notes.push('The proposed wheel spec was ignored — a static bench has no wheels.');
+    }
+    return undefined;
+  }
+  if (!override || Object.keys(override).length === 0) return base;
+  const merged: NonNullable<AssemblySpecJson['wheel']> = { ...(base ?? { diameterMm: 65, widthMm: 26 }) };
+  const bad: string[] = [];
+  if (override.diameterMm !== undefined) {
+    if (override.diameterMm < 20 || override.diameterMm > 300) bad.push('diameterMm');
+    else merged.diameterMm = override.diameterMm;
+  }
+  if (override.widthMm !== undefined) {
+    if (override.widthMm < 5 || override.widthMm > 120) bad.push('widthMm');
+    else merged.widthMm = override.widthMm;
+  }
+  if (typeof override.tireColor === 'string' && override.tireColor) merged.tireColor = override.tireColor;
+  if (typeof override.color === 'string' && override.color) merged.color = override.color;
+  if (bad.length > 0) {
+    notes.push(`The proposed wheel ${bad.join(' and ')} was out of range (⌀20–300 mm, width 5–120 mm) — the valid parts were kept.`);
+    return merged;
+  }
+  notes.push(`Wheels sized by the model: ⌀${Math.round(merged.diameterMm)} × ${Math.round(merged.widthMm)} mm.`);
+  return merged;
+}
+
 /** Merge proposal mounts over the base: same role replaces, `passenger` appends. */
 function mergeMounts(base: AssemblyMount[], extra: AssemblyProposal['mounts'], notes: string[]): AssemblyMount[] {
   if (!extra || extra.length === 0) return base;
@@ -379,6 +417,42 @@ export function resolveAssemblyPlan(proposal: AssemblyProposal | null, context: 
     if (!mountedRoles.has(role)) delete bindings[role];
   }
 
+  // The parametric extras: wheels/casters/propellers the electrical roster
+  // cannot supply. The scene draws them from the spec at every mount no real
+  // part claims, so the product shape is complete even with no wheel parts —
+  // and the plan says so honestly.
+  const wheel = mergeWheelSpec(base.wheel, baseId, proposal?.wheel, notes);
+  const unboundWheels = (chassis?.mounts ?? []).filter(
+    (mount) => mount.role.startsWith('wheel_') && !bindings[mount.role as AssemblyRole],
+  );
+  const unboundCasters = (chassis?.mounts ?? []).filter(
+    (mount) => (mount.role === 'caster_front' || mount.role === 'caster_back') && !bindings[mount.role as AssemblyRole],
+  );
+  const isFlyingShape = base.kinematics?.model === 'quadcopter' || base.kinematics?.model === 'hexacopter';
+  const parametricRoles: string[] = [
+    ...unboundWheels.map((mount) => mount.role as string),
+    ...unboundCasters.map((mount) => mount.role as string),
+  ];
+  if (unboundWheels.length > 0) {
+    notes.push(
+      `${unboundWheels.length} parametric wheel${unboundWheels.length > 1 ? 's' : ''} (⌀${Math.round(wheel?.diameterMm ?? 65)} mm) render at the wheel mounts — this build has no wheel parts, the archetype supplies the shape.`,
+    );
+  }
+  if (unboundCasters.length > 0) {
+    notes.push(
+      `${unboundCasters.length} caster${unboundCasters.length > 1 ? 's' : ''} render parametrically at the caster mount${unboundCasters.length > 1 ? 's' : ''} — no caster part in this build.`,
+    );
+  }
+  if (isFlyingShape && chassis) {
+    const rotors = (chassis.mounts ?? []).filter((mount) => mount.role.startsWith('motor_'));
+    if (rotors.length > 0 && !context.roster.some(isPropeller)) {
+      parametricRoles.push(...rotors.map((mount) => mount.role as string));
+      notes.push(
+        `${rotors.length} propeller${rotors.length > 1 ? 's' : ''} render parametrically on the motors — this build has no propeller parts.`,
+      );
+    }
+  }
+
   const origin = (proposal?.origin ? clampVec(proposal.origin, WORLD_LIMIT_MM) : null) ??
     base.origin ?? { x: 0, y: 0, z: 0 };
   if (proposal?.origin && !clampVec(proposal.origin, WORLD_LIMIT_MM)) {
@@ -540,7 +614,7 @@ export function resolveAssemblyPlan(proposal: AssemblyProposal | null, context: 
   const spec: AssemblySpecJson = {
     ...(base.archetype ? { archetype: base.archetype } : {}),
     ...(chassis ? { chassis } : {}),
-    ...(base.wheel ? { wheel: base.wheel } : {}),
+    ...(wheel ? { wheel } : {}),
     kinematics: base.kinematics,
     ...(base.sensors ? { sensors: base.sensors } : {}),
     ...(Object.keys(bindings).length > 0 ? { bindings: { ...bindings } } : {}),
@@ -563,6 +637,7 @@ export function resolveAssemblyPlan(proposal: AssemblyProposal | null, context: 
       bindings,
       placements,
       parametric,
+      parametricRoles,
       unplaced,
       notes,
       warnings,
@@ -604,6 +679,8 @@ export function pruneAssemblyToIds(
     return false;
   });
   const unplaced = plan.unplaced.filter((id) => validIds.has(id));
+  // `parametricRoles` are mount roles, not instance ids — the scene still
+  // draws wheels/casters/props for whatever instances survive.
   if (dropped.length === 0) return { plan, dropped };
   const next: ResolvedAssemblyPlan = {
     ...plan,

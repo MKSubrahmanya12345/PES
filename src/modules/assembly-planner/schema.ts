@@ -77,6 +77,19 @@ const PlacementSchema = z.object({
 });
 
 /**
+ * Parametric extras sizing. Wheels, casters and propellers are not electrical
+ * parts, so they never appear in the roster — the scene renders them straight
+ * from this spec. The model may size them to the product.
+ */
+const WheelOverrideSchema = z.object({
+  /** Wheel diameter in mm — on flying frames this is the propeller disc. */
+  diameterMm: z.number().finite().min(20).max(300).optional(),
+  widthMm: z.number().finite().min(5).max(120).optional(),
+  tireColor: z.string().max(32).optional(),
+  color: z.string().max(32).optional(),
+});
+
+/**
  * What the model may return. Every field is optional: `{}` is a valid
  * proposal meaning "the deterministic baseline is fine". Fields present
  * override the resolved base archetype (see `resolve.ts` for merge rules).
@@ -90,6 +103,8 @@ export const AssemblyProposalSchema = z.object({
   chassis: ChassisSchema.optional(),
   /** Mounts that replace (same role) or extend (`passenger`) the base mounts. */
   mounts: z.array(MountSchema).max(64).optional(),
+  /** Parametric extras sizing: the wheels (or drone prop discs) the scene renders at the wheel/motor mounts. */
+  wheel: WheelOverrideSchema.optional(),
   /** Role → diagram instance id. Only roster ids survive resolution. */
   bindings: z.record(z.string(), z.string()).optional(),
   /** Explicit world placements in bench mm (for static builds / extras). */
