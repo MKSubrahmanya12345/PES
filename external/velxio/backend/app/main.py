@@ -13,7 +13,7 @@ if sys.platform == 'win32':
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import compile, compile_chip, compile_rom, flash, intellisense, libraries, micropython_libs
+from app.api.routes import compile, compile_chip, compile_rom, flash, intellisense, libraries, metrics, micropython_libs
 from app.core.config import settings
 from app.core.hooks import run_lifespan_startup
 
@@ -106,11 +106,12 @@ app.include_router(intellisense.router, prefix="/api/intellisense", tags=["intel
 # get it too.
 app.include_router(flash.router, prefix="/api/flash", tags=["flash"])
 
-# Auth / projects / admin / metrics routers used to be wired up here, gated
-# on the auth/DB stack being importable. Phase 2 of the OSS split moved
-# them out of upstream entirely — they now live under the private overlay's
-# pro/backend/app/api/routes/ and are registered by register_pro(app)
-# below. The OSS image carries none of them: anonymous, stateless.
+# Auth / projects / admin routers used to be wired up here, gated on the
+# auth/DB stack being importable. Phase 2 of the OSS split moved them out of
+# upstream entirely — they now live under the private overlay's
+# pro/backend/app/api/routes/ and are registered by register_pro(app) below.
+# The OSS image is anonymous and stateless; its metrics compatibility route is
+# mounted below only when the private overlay is absent.
 
 # WebSockets
 from app.api.routes import simulation
@@ -136,7 +137,7 @@ try:
     from app.pro import register_pro  # type: ignore[import-not-found]
     register_pro(app)
 except ImportError:
-    pass
+    app.include_router(metrics.router, prefix="/api/metrics", tags=["metrics"])
 
 @app.get("/")
 def root():
