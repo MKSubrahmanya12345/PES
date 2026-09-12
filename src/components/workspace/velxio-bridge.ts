@@ -91,6 +91,7 @@ export function useVelxioBridge({
   // the build's .vlx changes — re-registering would race Velxio's `ready`.
   const pending = useRef<string | null>(autoPushVlx);
   pending.current = autoPushVlx;
+  const lastPushedVlx = useRef<string | null>(null);
 
   const origin = useMemo(() => {
     if (!embedUrl) return null;
@@ -170,7 +171,10 @@ export function useVelxioBridge({
         case 'velxio:ready': {
           setStatus({ state: 'ready' });
           // The whole point: the build lands on the canvas unasked.
-          if (pending.current) post({ type: 'velxio:load-vlx', vlx: pending.current });
+          if (pending.current) {
+            post({ type: 'velxio:load-vlx', vlx: pending.current });
+            lastPushedVlx.current = pending.current;
+          }
           break;
         }
         case 'velxio:vlx-loaded': {
@@ -211,11 +215,14 @@ export function useVelxioBridge({
     };
   }, [origin, post]);
 
-  // A .vlx that arrives AFTER Velxio said ready (the build finished while the
-  // page was open) still has to reach the canvas.
+  // A .vlx that arrives or updates AFTER Velxio said ready (the build finished
+  // or sketch.ino was updated by the agent) MUST be re-posted to the canvas.
   useEffect(() => {
     if (!autoPushVlx) return;
-    if (status.state !== 'ready') return;
+    if (status.state !== 'ready' && status.state !== 'pushed') return;
+    if (autoPushVlx === lastPushedVlx.current) return;
+
+    lastPushedVlx.current = autoPushVlx;
     push(autoPushVlx);
   }, [autoPushVlx, status.state, push]);
 
