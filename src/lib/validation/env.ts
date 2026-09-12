@@ -113,6 +113,15 @@ const ServerEnvSchema = z.object({
   // Arduino core with g++/clang++ before a revision is frozen. Skipped
   // honestly when no compiler is on PATH.
   WIREUP_ENABLE_FIRMWARE_COMPILE: boolFrom(true),
+  // Real simulation loop: cross-compile to AVR/ESP machine code with
+  // arduino-cli and execute in avr8js emulator. Validates actual peripheral
+  // behavior, not just type-checking. Default off until proven stable.
+  WIREUP_ENABLE_REAL_SIM_LOOP: boolFrom(false),
+  // Max iterations for the real sim validation (separate from fix iterations
+  // because real AVR execution is expensive).
+  WIREUP_MAX_SIM_ITERATIONS: intFrom(2),
+  // Wall-clock timeout per simulation run (ms) to prevent infinite loops.
+  WIREUP_SIM_TIMEOUT_MS: intFrom(30_000),
   WIREUP_AUTOSEED_COMPONENTS: boolFrom(true),
   WIREUP_MAX_REVISIONS: intFrom(12),
   WIREUP_MAX_EVENTS: intFrom(1500),
@@ -165,6 +174,20 @@ const ServerEnvSchema = z.object({
   // --- Networking ---
   WIREUP_DNS_RESULT_ORDER: optionalString,
 
+  // --- Terminal ---
+  // Path-delimiter-separated folders the terminal feature may run in.
+  // Defaults to cwd + homedir if not set. Use this to add any folder.
+  // Windows: "C:\\Projects;D:\\Work"  Unix: "/home/you/projects:/home/you"
+  WIREUP_TERMINAL_ROOTS: optionalString,
+  // Master switch for terminal feature (default: enabled)
+  WIREUP_TERMINAL_ENABLED: boolFrom(true),
+  // Allow freeform folder entry vs picker-only (default: false)
+  WIREUP_TERMINAL_FREEFORM: boolFrom(false),
+  // Max concurrent terminal sessions (default: 3, max: 16)
+  WIREUP_TERMINAL_MAX_SESSIONS: intFrom(3),
+  // Max lines per session buffer (default: 6000, max: 50000)
+  WIREUP_TERMINAL_MAX_LINES: intFrom(6000),
+
   NODE_ENV: z.string().optional().transform((v) => v ?? 'development'),
 });
 
@@ -211,6 +234,9 @@ export interface ServerEnv {
     enableLlmValidation: boolean;
     enableLlmCodegen: boolean;
     enableFirmwareCompile: boolean;
+    enableRealSimLoop: boolean;
+    maxSimIterations: number;
+    simTimeoutMs: number;
     autoseedComponents: boolean;
     maxRevisions: number;
     maxEvents: number;
@@ -234,6 +260,13 @@ export interface ServerEnv {
   };
   net: {
     dnsResultOrder: DnsResultOrder;
+  };
+  terminal: {
+    roots?: string;
+    enabled: boolean;
+    freeform: boolean;
+    maxSessions: number;
+    maxLines: number;
   };
   nodeEnv: string;
 }
@@ -304,6 +337,9 @@ function read(): ServerEnv {
       enableLlmValidation: parsed.WIREUP_ENABLE_LLM_VALIDATION,
       enableLlmCodegen: parsed.WIREUP_ENABLE_LLM_CODEGEN,
       enableFirmwareCompile: parsed.WIREUP_ENABLE_FIRMWARE_COMPILE,
+      enableRealSimLoop: parsed.WIREUP_ENABLE_REAL_SIM_LOOP,
+      maxSimIterations: Math.max(0, parsed.WIREUP_MAX_SIM_ITERATIONS),
+      simTimeoutMs: Math.max(1000, parsed.WIREUP_SIM_TIMEOUT_MS),
       autoseedComponents: parsed.WIREUP_AUTOSEED_COMPONENTS,
       maxRevisions: Math.max(1, parsed.WIREUP_MAX_REVISIONS),
       maxEvents: Math.max(50, parsed.WIREUP_MAX_EVENTS),
@@ -327,6 +363,13 @@ function read(): ServerEnv {
     },
     net: {
       dnsResultOrder: parseDnsResultOrder(parsed.WIREUP_DNS_RESULT_ORDER),
+    },
+    terminal: {
+      roots: parsed.WIREUP_TERMINAL_ROOTS,
+      enabled: parsed.WIREUP_TERMINAL_ENABLED,
+      freeform: parsed.WIREUP_TERMINAL_FREEFORM,
+      maxSessions: Math.min(16, Math.max(1, parsed.WIREUP_TERMINAL_MAX_SESSIONS)),
+      maxLines: Math.min(50000, Math.max(100, parsed.WIREUP_TERMINAL_MAX_LINES)),
     },
     nodeEnv: parsed.NODE_ENV ?? 'development',
   };

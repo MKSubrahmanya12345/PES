@@ -9,9 +9,101 @@
 
 import type { EverflowEvaluation, EverflowGraph, HumanTask } from '@/types/everflow';
 import type { ProjectState } from '@/types/project';
+import type { ValidationIssue, ValidationIssueCode } from '@/types/validation';
 
 import { createId } from '@/lib/validation/ids';
 import { nowIso } from '@/lib/validation/time';
+
+/**
+ * Threshold configuration for human escalation.
+ *
+ * The fixer can leave behind issues that are:
+ *   - Cosmetic (minor, don't affect functionality)
+ *   - Single-issue (isolated, not systemic)
+ *   - Warning-adjacent (low severity)
+ *
+ * These should auto-accept rather than bothering the user.
+ */
+export interface EscalationThreshold {
+  /** Max errors that can auto-accept (vs escalate to human). */
+  maxAutoAcceptErrors: number;
+  /** Issue codes considered "cosmetic" — auto-accepted if no serious issues. */
+  cosmeticCodes: ValidationIssueCode[];
+  /** Max ratio of cosmetic issues to total (if higher, escalate). */
+  maxCosmeticRatio: number;
+}
+
+/** Default threshold: auto-accept up to 2 cosmetic issues, escalate on structural problems. */
+export const DEFAULT_ESCALATION_THRESHOLD: EscalationThreshold = {
+  maxAutoAcceptErrors: 2,
+  cosmeticCodes: [
+    'diagram_out_of_sync',      // Visual-only, doesn't affect hardware
+    'instructions_out_of_sync', // Documentation issue
+    'library_unused',           // Extra library, harmless
+    'code_stray_include',       // Extra include, harmless
+    'model_review',             // Model suggestion, not a hard error
+  ],
+  maxCosmeticRatio: 1.0, // If all remaining issues are cosmetic, auto-accept
+};
+
+/**
+ * Classify remaining validation issues to decide whether to escalate to human.
+ *
+ * Returns:
+ *   - escalate: true if human review needed
+ *   - reason: explanation for the decision
+ *   - autoAcceptable: issues that can be silently accepted
+ *   - serious: issues that would require human attention
+ */
+function classifyIssues(
+  issues: ValidationIssue[],
+  threshold: EscalationThreshold,
+): {
+  escalate: boolean;
+  reason: string;
+  autoAcceptable: ValidationIssue[];
+  serious: ValidationIssue[];
+} {
+  const cosmeticSet = new Set(threshold.cosmeticCodes);
+  const autoAcceptable: ValidationIssue[] = [];
+  const serious: ValidationIssue[] = [];
+
+  for (const issue of issues) {
+    if (cosmeticSet.has(issue.code)) {
+      autoAcceptable.push(issue);
+    } else {
+      serious.push(issue);
+    }
+  }
+
+  // Escalate if there are serious issues
+  if (serious.length > 0) {
+    return {
+      escalate: true,
+      reason: `${serious.length} serious issue(s) require human review`,
+      autoAcceptable,
+      serious,
+    };
+  }
+
+  // Escalate if too many cosmetic issues
+  if (autoAcceptable.length > threshold.maxAutoAcceptErrors) {
+    return {
+      escalate: true,
+      reason: `${autoAcceptable.length} cosmetic issues exceed threshold (${threshold.maxAutoAcceptErrors})`,
+      autoAcceptable,
+      serious,
+    };
+  }
+
+  // Auto-accept: all remaining issues are cosmetic and within threshold
+  return {
+    escalate: false,
+    reason: `All ${autoAcceptable.length} remaining issue(s) are cosmetic — auto-accepting`,
+    autoAcceptable,
+    serious,
+  };
+}
 
 export interface PlanResult {
   /** ai→human tasks to file this pass. */
@@ -113,27 +205,46 @@ export function planContinuation(state: ProjectState, graph: EverflowGraph, eval
     );
   }
 
-  /* 3. Blocking validation issues the fixer could not repair → review ask. */
+  /* 3. Blocking validation issues the fixer could not repair → review ask.
+   *
+   * THRESHOLD LOGIC: Not all surviving errors are equal. Cosmetic issues
+   * (diagram out of sync, unused libraries, etc.) are auto-accepted with a
+   * note. Only serious issues (compatibility, pin conflicts, compile errors)
+   * escalate to human review.
+   */
   const validationErrors = state.validation?.summary.errors ?? 0;
+  const errorIssues = state.validation?.issues.filter((i) => i.severity === 'error') ?? [];
+
   if (validationErrors > 0 && !state.humanTasks.some((task) => task.status === 'open' && task.direction === 'ai_to_human' && task.type === 'review')) {
-    fileTask(
-      makeTask(
-        {
-          direction: 'ai_to_human',
-          type: 'review',
-          title: `${validationErrors} blocking issue(s) survived the fix loop`,
-          body: 'I repaired what I could deterministically; the rest needs a design call. Look at the issues and tell me which to accept, drop or change.',
-          asks: { shape: 'text', positiveOptions: ['Accept as-is', 'Accepted'] },
-          linkedNodeIds: ['ev-goal-validation'],
-          lookAt: { kind: 'quality', ref: `/project/${state.id}/quality`, label: 'Open Check & fix' },
-          priority: 'high',
-          defaultOnExpiry: 'halt',
-          assumptionIfSkipped: 'Design call pending — the project stays flagged completed_with_errors.',
-          source: 'ai',
-        },
-        at,
-      ),
-    );
+    const classification = classifyIssues(errorIssues, DEFAULT_ESCALATION_THRESHOLD);
+
+    if (classification.escalate) {
+      // Serious issues: escalate to human
+      fileTask(
+        makeTask(
+          {
+            direction: 'ai_to_human',
+            type: 'review',
+            title: `${classification.serious.length} blocking issue(s) survived the fix loop`,
+            body: `I repaired what I could deterministically; ${classification.reason}. Look at the issues and tell me which to accept, drop or change.`,
+            asks: { shape: 'text', positiveOptions: ['Accept as-is', 'Accepted'] },
+            linkedNodeIds: ['ev-goal-validation'],
+            lookAt: { kind: 'quality', ref: `/project/${state.id}/quality`, label: 'Open Check & fix' },
+            priority: 'high',
+            defaultOnExpiry: 'halt',
+            assumptionIfSkipped: 'Design call pending — the project stays flagged completed_with_errors.',
+            source: 'ai',
+          },
+          at,
+        ),
+      );
+    } else {
+      // Cosmetic issues only: auto-accept with a note
+      result.description.push(`Auto-accepted ${classification.autoAcceptable.length} cosmetic issue(s): ${classification.reason}`);
+      for (const issue of classification.autoAcceptable) {
+        result.description.push(`  - ${issue.code}: ${issue.message}`);
+      }
+    }
   }
 
   /* 4. Human → AI additions waiting for the agent. */

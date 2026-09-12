@@ -1320,6 +1320,28 @@ function planForIssue(ctx: Ctx, issue: ValidationIssue): void {
       return;
     }
 
+    case 'sim_behavior_mismatch': {
+      /*
+       * Real AVR simulation found a behavior mismatch. This is like
+       * behavioral_assertion_failed but from real hardware emulation rather
+       * than the host-exec stub. The fix is the same: regenerate the firmware
+       * deterministically since there's no safe one-line patch for logic errors.
+       *
+       * The sim_behavior_mismatch code is NOT in AUTO_FIXABLE_CODES because
+       * real sim mismatches usually need code changes the LLM fixer should propose.
+       * The deterministic fixer just triggers a rerun; the LLM fixer will
+       * handle the actual code changes if needed.
+       */
+      const details = issue.details ?? issue.message;
+      rerunForced(
+        ctx,
+        issue,
+        'code',
+        `Real AVR simulation behavior mismatch: ${details.slice(0, 200)}. Regenerating the firmware deterministically.`,
+      );
+      return;
+    }
+
     case 'diagram_out_of_sync':
     case 'diagram_missing_component':
     case 'diagram_missing_connection':

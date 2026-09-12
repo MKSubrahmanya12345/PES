@@ -10,7 +10,7 @@
  */
 
 import type { AgentEventLog } from '@/lib/logging/events';
-import type { ComponentDefinition } from '@/types/component';
+import type { ComponentDefinition, ComponentSelection } from '@/types/component';
 import type { ProjectRequirements } from '@/types/project';
 import type { PromptAnalysis } from '@/modules/project-understanding/heuristics';
 import type { AgentBlackboard, AgentStepRecord } from './types';
@@ -20,6 +20,95 @@ import { logger } from '@/lib/logging/logger';
 import { nowIso } from '@/lib/validation/time';
 import { planHardware } from '@/modules/hardware-planner';
 import type { ContentBlock, Message, Tool } from '@aws-sdk/client-bedrock-runtime';
+
+/**
+ * Completion tracking for the ReAct loop fallback strategy.
+ *
+ * The original bug: fallback blocks checked `selections.length === 0` which
+ * treated partial completion as "done". Now we compute what's actually
+ * missing against the project's requirements.
+ */
+interface CompletionStatus {
+  hasController: boolean;
+  requiredComponentCount: number;
+  selectedComponentCount: number;
+  unfulfilledRequirements: string[];
+  missingComponents: string[];
+  isComplete: boolean;
+}
+
+/**
+ * Compute completion status by comparing selections against requirements.
+ * This catches partial completion where the ReAct loop selected some but
+ * not all required components.
+ */
+function computeCompletionStatus(
+  selections: ComponentSelection[],
+  requirements: ProjectRequirements,
+): CompletionStatus {
+  const controller = selections.find((s) => s.category === 'microcontroller');
+  const hasController = Boolean(controller);
+
+  // Count non-controller components (the actual hardware)
+  const hardwareSelections = selections.filter((s) => s.category !== 'microcontroller');
+
+  // Infer expected component count from requirements
+  // Each requirement/feature should map to at least one component
+  const expectedMinComponents = Math.max(
+    requirements.features.length,
+    requirements.inputs.length + requirements.outputs.length,
+    Object.values(requirements.quantities).reduce((a, b) => a + b, 0),
+  );
+
+  // Check for unfulfilled requirements by looking at what was selected
+  const selectedIds = new Set(selections.map((s) => s.componentId));
+  const unfulfilledRequirements: string[] = [];
+  const missingComponents: string[] = [];
+
+  // Check if inputs are covered
+  for (const input of requirements.inputs) {
+    const hasMatchingComponent = selections.some((s) =>
+      s.componentId.toLowerCase().includes(input.toLowerCase()) ||
+      s.role.toLowerCase().includes(input.toLowerCase()),
+    );
+    if (!hasMatchingComponent) {
+      unfulfilledRequirements.push(`input: ${input}`);
+    }
+  }
+
+  // Check if outputs are covered
+  for (const output of requirements.outputs) {
+    const hasMatchingComponent = selections.some((s) =>
+      s.componentId.toLowerCase().includes(output.toLowerCase()) ||
+      s.role.toLowerCase().includes(output.toLowerCase()),
+    );
+    if (!hasMatchingComponent) {
+      unfulfilledRequirements.push(`output: ${output}`);
+    }
+  }
+
+  // Check features
+  for (const feature of requirements.features) {
+    const hasMatchingComponent = selections.some((s) =>
+      s.componentId.toLowerCase().includes(feature.toLowerCase()) ||
+      s.role.toLowerCase().includes(feature.toLowerCase()),
+    );
+    if (!hasMatchingComponent) {
+      unfulfilledRequirements.push(`feature: ${feature}`);
+    }
+  }
+
+  const isComplete = hasController && hardwareSelections.length >= Math.max(1, expectedMinComponents * 0.5);
+
+  return {
+    hasController,
+    requiredComponentCount: expectedMinComponents,
+    selectedComponentCount: hardwareSelections.length,
+    unfulfilledRequirements,
+    missingComponents,
+    isComplete,
+  };
+}
 
 export interface AgentRunInput {
   prompt: string;
@@ -234,35 +323,58 @@ Please autonomously design, verify, wire, code, and finalize this hardware syste
   /* Autonomous Completion Strategy: Guarantees 100% Sound Execution & Offline  */
   /* -------------------------------------------------------------------------- */
 
-  // 1. Ensure Hardware Selection
-  if (blackboard.selections.length === 0) {
+  // 1. Ensure Hardware Selection (completeness check, not just emptiness)
+  const completionBefore = computeCompletionStatus(blackboard.selections, requirements);
+  if (!completionBefore.isComplete) {
     const hwHandle = events.start('hardware_plan_started', 'Agent selecting components and checking physical constraints...', {
       stage: 'hardware',
     });
 
+    // Log what was missing if ReAct partially completed
+    if (blackboard.selections.length > 0 && !completionBefore.isComplete) {
+      logger.warn(
+        {
+          projectName,
+          selectionsCount: blackboard.selections.length,
+          unfulfilledRequirements: completionBefore.unfulfilledRequirements,
+          missingComponents: completionBefore.missingComponents,
+        },
+        'ReAct loop partially completed; filling missing components',
+      );
+      blackboard.notes.push(
+        `Note: ReAct loop selected ${blackboard.selections.length} parts but requirements indicate ` +
+        `${completionBefore.requiredComponentCount} expected. Filling gaps deterministically.`,
+      );
+    }
+
     try {
       const targetPlatform = requirements.detectedPlatform || analysis.detectedPlatform || 'esp32';
-      const mcuSearchResults = await ALL_AGENT_TOOLS.search_components.execute(
-        { query: targetPlatform, category: 'microcontroller' },
-        toolContext,
-      );
 
-      logStep({
-        step: steps.length + 1,
-        thought: `Selecting microcontroller platform matching "${targetPlatform}".`,
-        action: { tool: 'search_components', args: { query: targetPlatform, category: 'microcontroller' } },
-        result: mcuSearchResults,
-        timestamp: nowIso(),
-      });
+      // Only select MCU if missing
+      if (!completionBefore.hasController) {
+        const mcuSearchResults = await ALL_AGENT_TOOLS.search_components.execute(
+          { query: targetPlatform, category: 'microcontroller' },
+          toolContext,
+        );
 
-      const mcuList = (mcuSearchResults.data as Array<{ id: string }>) || [];
-      const chosenMcuId = mcuList[0]?.id || 'esp32-devkit-v1';
+        logStep({
+          step: steps.length + 1,
+          thought: `Selecting microcontroller platform matching "${targetPlatform}".`,
+          action: { tool: 'search_components', args: { query: targetPlatform, category: 'microcontroller' } },
+          result: mcuSearchResults,
+          timestamp: nowIso(),
+        });
 
-      await ALL_AGENT_TOOLS.select_component.execute(
-        { componentId: chosenMcuId, role: 'Main microcontroller', quantity: 1 },
-        toolContext,
-      );
+        const mcuList = (mcuSearchResults.data as Array<{ id: string }>) || [];
+        const chosenMcuId = mcuList[0]?.id || 'esp32-devkit-v1';
 
+        await ALL_AGENT_TOOLS.select_component.execute(
+          { componentId: chosenMcuId, role: 'Main microcontroller', quantity: 1 },
+          toolContext,
+        );
+      }
+
+      // Always run planHardware to ensure all requirements are covered
       const plannedHardware = await planHardware(
         { requirements, analysis, modelComponents: [], catalog: blackboard.workingCatalog },
         events,
@@ -272,8 +384,10 @@ Please autonomously design, verify, wire, code, and finalize this hardware syste
         blackboard.workingCatalog.push(...plannedHardware.provisional);
       }
 
+      // Select any missing components from the plan
+      const selectedIds = new Set(blackboard.selections.map((s) => s.componentId));
       for (const sel of plannedHardware.selections) {
-        if (sel.componentId !== chosenMcuId) {
+        if (!selectedIds.has(sel.componentId)) {
           await ALL_AGENT_TOOLS.select_component.execute(
             { componentId: sel.componentId, role: sel.role, quantity: sel.quantity },
             toolContext,
@@ -290,8 +404,24 @@ Please autonomously design, verify, wire, code, and finalize this hardware syste
         timestamp: nowIso(),
       });
 
+      // Verify completion after fallback
+      const completionAfter = computeCompletionStatus(blackboard.selections, requirements);
+      if (!completionAfter.isComplete) {
+        logger.warn(
+          {
+            projectName,
+            stillUnfulfilled: completionAfter.unfulfilledRequirements,
+          },
+          'Hardware selection still incomplete after fallback',
+        );
+        blackboard.notes.push(
+          `Warning: Could not fulfill all requirements. Missing: ${completionAfter.unfulfilledRequirements.join(', ')}`,
+        );
+      }
+
       hwHandle.complete(`Selected ${blackboard.selections.length} verified parts.`, {
         partsCount: blackboard.selections.length,
+        unfulfilledRequirements: completionAfter.unfulfilledRequirements.length,
       });
     } catch (error) {
       hwHandle.fail(`Hardware selection hit an error: ${error instanceof Error ? error.message : 'unknown'}`);
@@ -299,11 +429,32 @@ Please autonomously design, verify, wire, code, and finalize this hardware syste
     }
   }
 
-  // 2. Ensure Pin Allocation
-  if (blackboard.pinAssignments.length === 0) {
+  // 2. Ensure Pin Allocation (check that all selected components have pins assigned)
+  const controller = blackboard.selections.find((s) => s.category === 'microcontroller');
+  const hardwareComponents = blackboard.selections.filter((s) => s.category !== 'microcontroller');
+  const expectedPinCount = hardwareComponents.length > 0 ? hardwareComponents.length : 1;
+  const pinsComplete = blackboard.pinAssignments.length >= expectedPinCount;
+
+  if (!pinsComplete) {
     const pinHandle = events.start('pin_assignment_started', 'Agent assigning and testing microcontroller GPIO pins...', {
       stage: 'pins',
     });
+
+    // Log if ReAct partially assigned pins
+    if (blackboard.pinAssignments.length > 0) {
+      logger.warn(
+        {
+          projectName,
+          assignedPins: blackboard.pinAssignments.length,
+          expectedPins: expectedPinCount,
+        },
+        'ReAct loop partially assigned pins; completing assignment',
+      );
+      blackboard.notes.push(
+        `Note: ReAct loop assigned ${blackboard.pinAssignments.length} pins but ${expectedPinCount} expected. ` +
+        'Re-running pin assignment to ensure completeness.',
+      );
+    }
 
     const pinResult = await ALL_AGENT_TOOLS.assign_and_verify_pins.execute({}, toolContext);
     logStep({
@@ -321,11 +472,31 @@ Please autonomously design, verify, wire, code, and finalize this hardware syste
     }
   }
 
-  // 3. Ensure Circuit Routing
-  if (!blackboard.wiring) {
+  // 3. Ensure Circuit Routing (check that wiring exists and has connections for all assigned pins)
+  const expectedConnections = blackboard.pinAssignments.length > 0 ? blackboard.pinAssignments.length : 1;
+  const wiringComplete = blackboard.wiring &&
+    blackboard.wiring.connections.length >= expectedConnections * 0.5; // At least half the pins should have connections
+
+  if (!wiringComplete) {
     const wireHandle = events.start('wiring_started', 'Agent routing power rails, ground nets, and signals...', {
       stage: 'wiring',
     });
+
+    // Log if ReAct partially routed
+    if (blackboard.wiring && blackboard.wiring.connections.length > 0) {
+      logger.warn(
+        {
+          projectName,
+          existingConnections: blackboard.wiring.connections.length,
+          expectedConnections,
+        },
+        'ReAct loop partially routed wiring; completing routing',
+      );
+      blackboard.notes.push(
+        `Note: ReAct loop created ${blackboard.wiring.connections.length} connections but ` +
+        `${expectedConnections} expected. Re-running wiring to ensure completeness.`,
+      );
+    }
 
     const wireResult = await ALL_AGENT_TOOLS.route_wiring.execute({}, toolContext);
     logStep({
@@ -343,11 +514,31 @@ Please autonomously design, verify, wire, code, and finalize this hardware syste
     }
   }
 
-  // 4. Ensure Firmware Synthesis
-  if (!blackboard.code) {
+  // 4. Ensure Firmware Synthesis (check that code exists and has the entry point)
+  const codeComplete = blackboard.code &&
+    blackboard.code.files.length > 0 &&
+    blackboard.code.files.some((f) => f.path === (blackboard.code?.entryPoint ?? 'sketch.ino'));
+
+  if (!codeComplete) {
     const fwHandle = events.start('code_generation_started', 'Agent generating sketch.ino firmware based on assigned pins...', {
       stage: 'code',
     });
+
+    // Log if ReAct partially generated code
+    if (blackboard.code && blackboard.code.files.length > 0) {
+      logger.warn(
+        {
+          projectName,
+          fileCount: blackboard.code.files.length,
+          hasEntryPoint: blackboard.code.files.some((f) => f.path === blackboard.code?.entryPoint),
+        },
+        'ReAct loop partially generated firmware; regenerating',
+      );
+      blackboard.notes.push(
+        `Note: ReAct loop generated ${blackboard.code.files.length} files but entry point may be missing. ` +
+        'Regenerating firmware to ensure completeness.',
+      );
+    }
 
     const fwResult = await ALL_AGENT_TOOLS.generate_firmware.execute({}, toolContext);
     logStep({
@@ -366,10 +557,36 @@ Please autonomously design, verify, wire, code, and finalize this hardware syste
   }
 
   // 5. Ensure Artifacts (Diagram, BOM, Instructions)
-  if (!blackboard.diagram || !blackboard.instructions) {
+  // Check completeness: diagram should have components matching selections, instructions should have sections
+  const diagramComplete = blackboard.diagram &&
+    blackboard.diagram.components.length >= blackboard.selections.length * 0.5;
+  const instructionsComplete = blackboard.instructions &&
+    blackboard.instructions.sections.length > 0;
+  const artifactsComplete = diagramComplete && instructionsComplete && Boolean(blackboard.libraries);
+
+  if (!artifactsComplete) {
     const artHandle = events.start('instructions_generation_started', 'Agent building simulation diagram and instructions...', {
       stage: 'instructions',
     });
+
+    // Log if ReAct partially generated artifacts
+    if ((blackboard.diagram && !diagramComplete) || (blackboard.instructions && !instructionsComplete)) {
+      logger.warn(
+        {
+          projectName,
+          diagramComponents: blackboard.diagram?.components.length ?? 0,
+          expectedComponents: blackboard.selections.length,
+          instructionSections: blackboard.instructions?.sections.length ?? 0,
+          hasLibraries: Boolean(blackboard.libraries),
+        },
+        'ReAct loop partially generated artifacts; regenerating',
+      );
+      blackboard.notes.push(
+        `Note: ReAct loop partially generated artifacts (diagram: ${blackboard.diagram?.components.length ?? 0}/` +
+        `${blackboard.selections.length} components, instructions: ${blackboard.instructions?.sections.length ?? 0} sections). ` +
+        'Regenerating to ensure completeness.',
+      );
+    }
 
     const artResult = await ALL_AGENT_TOOLS.build_artifacts.execute({}, toolContext);
     logStep({

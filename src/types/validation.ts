@@ -93,6 +93,8 @@ export type ValidationIssueCode =
   | 'requirement_uncovered'
   | 'quantity_shortfall'
   | 'behavioral_assertion_failed'
+  | 'sim_behavior_mismatch'
+  | 'sim_execution_unavailable'
   | 'model_review';
 
 export interface ValidationIssue {

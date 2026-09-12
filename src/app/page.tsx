@@ -34,7 +34,6 @@ export default function HomePage() {
           <span style={{ fontSize: 13 }}>⚙</span>
           <span>Admin Login</span>
         </Link>
-        <span className="topbar__meta topbar__meta--landing">engineering copilot / ready</span>
       </header>
 
       <main className="landing">

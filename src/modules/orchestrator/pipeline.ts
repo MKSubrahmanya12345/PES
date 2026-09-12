@@ -1,15 +1,21 @@
 /**
- * Generation pipeline.
+ * Generation pipeline — FIXED WATERFALL (not agentic graph traversal).
  *
- * Runs the stages in dependency order, one event + one persistence hook per
+ * Runs the stages in strict dependency order, one event + one persistence hook per
  * stage, so the UI always sees real progress:
  *
  *   understand → catalog → generation call → requirements → hardware →
  *   pins → wiring → software → code → libraries → diagram → instructions
  *
+ * This is a LINEAR pipeline, not a graph. The "agent traverses a graph" concept
+ * only applies to Everflow, which operates AFTER v1 generation is complete.
+ *
  * Every stage has a deterministic fallback: if Bedrock is unavailable (or its
  * JSON is unusable) the planners still produce a complete, wired project from
  * the catalog. The model refines; it never owns correctness.
+ *
+ * NOTE: The ReAct tool-calling loop runs INSIDE the hardware stage (via
+ * runHardwareAgent), not across stages. The stage sequence itself is fixed.
  */
 
 import type { AgentEventLog } from '@/lib/logging/events';
@@ -226,7 +232,20 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineOutput>
   const projectName = pickProjectName(modelPayload.project, requirements, base);
   await stage({ requirements, name: projectName }, 'understanding');
 
-  /* --- 5. Autonomous Hardware Agent Core ---------------------------------- */
+  /* --- 5. Hardware Stage (ReAct loop + deterministic fallback) ------------
+   *
+   * This stage runs the autonomous hardware agent which combines:
+   *   a) A ReAct tool-calling loop (up to 12 turns) for dynamic component
+   *      selection, pin assignment, wiring, and code generation;
+   *   b) A deterministic fallback that guarantees completion if the ReAct
+   *      loop exits early (partial completion, timeout, or exception).
+   *
+   * The fallback checks for COMPLETENESS not just presence — if the ReAct
+   * loop selected 2 of 5 required components, the fallback fills the gap.
+   *
+   * NOTE: This is still ONE STAGE in the linear pipeline. The agent does NOT
+   * traverse the pipeline stages as a graph — that only happens in Everflow.
+   */
   const agentRun = await runHardwareAgent({
     prompt: effectivePrompt(base),
     projectName,
