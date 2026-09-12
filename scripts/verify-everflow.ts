@@ -240,7 +240,7 @@ function section1(): void {
   console.log('\n1. intake — the deterministic doubt layer');
 
   const doubts = deriveDeterministicDoubts(PROMPT);
-  check('finds exactly the right number of doubts (5)', doubts.length === 5, `got ${doubts.length}`);
+  check('finds exactly the right number of doubts (3)', doubts.length === 3, `got ${doubts.length}`);
 
   const platform = doubts.find((d) => /microcontroller/i.test(d.question));
   check('no platform named → asks which controller (human, blocking)', Boolean(platform && platform.decider === 'human' && platform.blocking));

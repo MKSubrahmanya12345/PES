@@ -215,7 +215,7 @@ export interface GenerationError {
 
 export interface LlmCallRecord {
   id: string;
-  op: 'generation' | 'validation' | 'fix' | 'codegen';
+  op: 'generation' | 'validation' | 'firmware_review' | 'fix' | 'codegen';
   model: string;
   startedAt: string;
   finishedAt?: string;

@@ -221,35 +221,6 @@ export function deriveDeterministicDoubts(prompt: string): ProjectDoubt[] {
     });
   }
 
-  // Do not ask a universal context question on every project. It is useful only
-  // when the brief leaves the physical setting and audience genuinely open;
-  // a prompt that already says "outdoors", "desk", "lab", etc. has answered it.
-  const contextAlreadySpecified =
-    /\b(outdoors?|indoors?|desk|lab|workshop|home|office|school|kids?|children|wearable|vehicle|garden|farm|factory|kitchen|garage|classroom)\b/i.test(
-      prompt,
-    );
-  if (!contextAlreadySpecified) {
-    seeds.push({
-      question: 'Who is this for, and where will it be used (desk, outdoors, indoors, kids, lab…)?',
-      consequence: 'Environment decides enclosures, battery life targets and which safety checks matter.',
-      decider: 'human',
-      blocking: false,
-      options: [],
-      proposedDefault: null,
-      confidence: 0.2,
-    });
-  }
-
-  seeds.push({
-    question: 'Anything you already own that the build should account for (parts, case, PSU, breadboard)?',
-    consequence: 'The agent can reuse what you have instead of selecting parts you already bought.',
-    decider: 'human',
-    blocking: false,
-    options: [],
-    proposedDefault: null,
-    confidence: 0.2,
-  });
-
   return seeds.slice(0, 6).map((seed) => makeDoubt(seed, at));
 }
 

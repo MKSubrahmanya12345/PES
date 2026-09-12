@@ -13,7 +13,18 @@
  */
 
 import type { AgentEventLog } from '@/lib/logging/events';
-import type { LlmCallRecord, ProjectArtifacts, ProjectState } from '@/types/project';
+import type {
+  CodeArtifact,
+  HardwarePlan,
+  InstructionsArtifact,
+  LibrariesArtifact,
+  LlmCallRecord,
+  ProjectArtifacts,
+  ProjectState,
+  SoftwarePlan,
+} from '@/types/project';
+import type { WiringPlan } from '@/types/wiring';
+import type { Diagram } from '@/types/diagram';
 import type { GenerationStage } from '@/types/project';
 import type { ProjectPatch } from '@/lib/mongodb/projects';
 import type { PromptAnalysis } from '@/modules/project-understanding/heuristics';
@@ -27,15 +38,7 @@ import { nowIso } from '@/lib/validation/time';
 import { normalizeRequirements, understandPrompt } from '@/modules/project-understanding';
 import { formatAnalysisForPrompt } from '@/modules/project-understanding/heuristics';
 import { planHardware } from '@/modules/hardware-planner';
-import { planPins } from '@/modules/pin-planner';
-import { planWiring } from '@/modules/wiring-planner';
-import { planSoftware } from '@/modules/software-planner';
-import { generateCode } from '@/modules/code-generator';
-import { bedrockSketchPlanProvider } from '@/modules/code-generator/llm';
-import { generateLibraries } from '@/modules/libraries-generator';
-import { generateDiagram } from '@/modules/diagram-generator';
-import { generateInstructions } from '@/modules/instructions-generator';
-
+import { runHardwareAgent } from '@/modules/agent';
 import { buildGenerationContext, controllerInfo, type GenerationContext } from './context';
 
 export interface PipelineInput {
@@ -223,178 +226,106 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineOutput>
   const projectName = pickProjectName(modelPayload.project, requirements, base);
   await stage({ requirements, name: projectName }, 'understanding');
 
-  /* --- 5. Hardware -------------------------------------------------------- */
-  const hardware = await planHardware(
-    { requirements, analysis, modelComponents: modelPayload.components, catalog },
-    events,
-  );
-  const selections = hardware.selections;
-  const hardwarePlan = hardware.plan;
-  notes.push(...hardware.notes);
-  for (const entry of hardware.unmatched) {
-    events.emit('info', `Model asked for "${entry.query}" which is not in the component database — ${entry.reason}.`, {
-      stage: 'hardware',
-      metadata: { query: entry.query, reason: entry.reason },
-    });
-  }
-
-  /*
-   * Provisional parts are synthesised from an electrical contract when the
-   * catalog has no entry for a request. Every stage after this one resolves
-   * component ids against a catalog, so they must look the parts up here too —
-   * otherwise pins, wiring, diagram and firmware would silently skip the very
-   * component the user asked for. They stay flagged via `metadata.provisional`,
-   * which is what the validator reports on.
-   */
-  const workingCatalog = hardware.provisional.length ? [...catalog, ...hardware.provisional] : catalog;
-  for (const part of hardware.provisional) {
-    events.emit(
-      'info',
-      `"${part.metadata?.requestedAs ?? part.name}" is not in the component database yet — it was built from a `
-        + `${String(part.metadata?.contractFamily ?? 'generic')} template using worst-case values, so verify it against the datasheet before wiring.`,
-      { stage: 'hardware', metadata: { componentId: part.id, provisional: true } },
-    );
-  }
-  state = { ...state, components: selections, hardwarePlan, name: projectName };
-  await stage({ components: selections, hardwarePlan }, 'hardware');
-
-  const controller = controllerInfo({ ...state, components: selections, hardwarePlan }, workingCatalog);
-  const profile = controller.profile;
-
-  /* --- 6. Pins ------------------------------------------------------------ */
-  const pinPlan = planPins({
-    selections,
-    catalog: workingCatalog,
-    ...(controller.instanceId ? { controllerInstanceId: controller.instanceId } : {}),
-    modelPinAssignments: modelPayload.pinAssignments,
-    events,
-  });
-  const assignments = pinPlan.assignments;
-  notes.push(...pinPlan.notes);
-  for (const entry of pinPlan.unassigned) {
-    events.emit('info', `Could not assign ${entry.instanceId}.${entry.pin}: ${entry.reason}`, {
-      stage: 'pins',
-      metadata: { instanceId: entry.instanceId, pin: entry.pin, reason: entry.reason },
-    });
-  }
-  await stage({ pinAssignments: assignments }, 'pins');
-
-  /* --- 7. Wiring ---------------------------------------------------------- */
-  const wiring = planWiring({
-    selections,
-    catalog: workingCatalog,
-    assignments,
-    power: hardwarePlan.power,
-    ...(controller.instanceId ? { controllerInstanceId: controller.instanceId } : {}),
-    ...(profile ? { profile } : {}),
-    serialLinks: pinPlan.serialLinks,
-    modelWiring: modelPayload.wiring,
-    events,
-  });
-  notes.push(...wiring.notes);
-  await stage({ wiring }, 'wiring');
-
-  /* --- 8. Software plan --------------------------------------------------- */
-  const softwarePlan = planSoftware({
-    requirements,
-    selections,
-    catalog: workingCatalog,
-    assignments,
-    serialLinks: pinPlan.serialLinks,
-    i2cBuses: pinPlan.i2cBuses,
-    ...(controller.instanceId ? { controllerInstanceId: controller.instanceId } : {}),
-    ...(controller.componentId ? { controllerComponentId: controller.componentId } : {}),
-    modelSoftwarePlan: modelPayload.softwarePlan,
-    events,
-  });
-  await stage({ softwarePlan }, 'software');
-
-  /* --- 9. Firmware (AI-first when Bedrock is configured, rooted always) ---- */
-  const code = await generateCode({
-    projectName,
-    projectSummary: requirements.summary,
-    requirements,
-    selections,
-    catalog: workingCatalog,
-    assignments,
-    serialLinks: pinPlan.serialLinks,
-    i2cBuses: pinPlan.i2cBuses,
-    softwarePlan,
-    controllerName: controller.name,
-    ...(profile ? { profile } : {}),
-    revision: 1,
-    modelCode: modelPayload.code,
+  /* --- 5. Autonomous Hardware Agent Core ---------------------------------- */
+  const agentRun = await runHardwareAgent({
     prompt: effectivePrompt(base),
-    ...(bedrock.configured ? { llmProvider: bedrockSketchPlanProvider() } : {}),
-    onLlmCall: (call) => llmCalls.push(call),
+    projectName,
+    requirements,
+    analysis,
+    catalog,
     events,
   });
-  artifacts = { ...artifacts, code };
-  notes.push(...code.notes);
-  await stage(
-    {
-      artifacts,
-      llm: {
-        ...(bedrock.model ? { model: bedrock.model } : {}),
-        ...(bedrock.validationModel ? { validationModel: bedrock.validationModel } : {}),
-        calls: llmCalls,
-      },
-    },
-    'code',
-  );
 
-  /* --- 10. Libraries ------------------------------------------------------ */
-  const libraries = generateLibraries({
-    softwarePlan,
-    selections,
-    catalog: workingCatalog,
-    ...(controller.componentId ? { controllerComponentId: controller.componentId } : {}),
-    events,
-  });
-  artifacts = { ...artifacts, libraries };
-  notes.push(...libraries.notes);
-  await stage({ artifacts }, 'libraries');
-
-  /* --- 11. Diagram -------------------------------------------------------- */
-  const diagram = generateDiagram({
+  const { blackboard } = agentRun;
+  const selections = blackboard.selections;
+  const hardwarePlan: HardwarePlan = blackboard.hardwarePlan || {
+    summary: requirements.summary,
+    architecture: [],
+    controller: null,
+    power: { rails: [], adequate: true, notes: [] },
+    subsystems: [],
+    signalFlow: [],
+    compatibility: [],
+    supportingComponents: [],
+    risks: [],
+  };
+  const assignments = blackboard.pinAssignments;
+  const wiring: WiringPlan = blackboard.wiring || {
+    connections: [],
+    conflicts: [],
+    nets: [],
+    notes: [],
+    generatedAt: nowIso(),
+  };
+  const softwarePlan: SoftwarePlan = blackboard.softwarePlan || {
+    architecture: 'Layered',
+    language: 'arduino-cpp',
+    modules: [],
+    libraries: [],
+    controlStates: [],
+    inputHandling: [],
+    sensorLogic: [],
+    actuatorLogic: [],
+    communication: null,
+    safety: [],
+    loopStrategy: 'non_blocking',
+    files: [{ path: 'sketch.ino', purpose: 'Main sketch' }],
+  };
+  const code: CodeArtifact = blackboard.code || {
+    files: [],
+    entryPoint: 'sketch.ino',
+    pinsSynchronised: true,
+    notes: [],
+  };
+  const libraries: LibrariesArtifact = blackboard.libraries || {
+    libraries: [],
+    installCommands: [],
+    notes: [],
+    generatedAt: nowIso(),
+  };
+  const diagram: Diagram = blackboard.diagram || {
+    version: '1.0',
+    format: 'wireup-diagram',
+    generator: 'Wireup Agent',
+    createdAt: nowIso(),
     projectId: base.id,
     revision: 1,
-    projectName,
-    projectSummary: requirements.summary,
-    requirements,
-    selections,
-    catalog: workingCatalog,
-    assignments,
-    wiring,
-    hardwarePlan,
-    events,
-  });
-  artifacts = { ...artifacts, diagram };
-  await stage({ artifacts }, 'diagram');
+    meta: {
+      title: projectName,
+      description: requirements.summary,
+      simulatorTarget: 'wokwi',
+      units: 'px',
+      gridSize: 10,
+    },
+    components: [],
+    connections: [],
+    rails: [],
+    groups: [],
+    layout: { width: 800, height: 600, columns: 8, rows: 6 },
+    stats: {
+      components: 0,
+      connections: 0,
+      powerConnections: 0,
+      groundConnections: 0,
+      signalConnections: 0,
+      pins: 0,
+    },
+  };
+  const instructions: InstructionsArtifact = blackboard.instructions || {
+    markdown: '',
+    sections: [],
+    billOfMaterials: [],
+    estimatedBuildTimeMinutes: 30,
+    generatedAt: nowIso(),
+  };
 
-  /* --- 12. Instructions --------------------------------------------------- */
-  const instructions = generateInstructions({
-    projectName,
-    projectSummary: requirements.summary,
-    requirements,
-    selections,
-    catalog: workingCatalog,
-    hardwarePlan,
-    pinAssignments: assignments,
-    wiring,
-    softwarePlan,
-    libraries,
-    diagram,
-    controllerName: controller.name,
-    ...(controller.componentId ? { controllerComponentId: controller.componentId } : {}),
-    revision: 1,
-    modelInstructions: modelPayload.instructions,
-    events,
-  });
-  artifacts = { ...artifacts, instructions };
-  if (instructions.estimatedBuildTimeMinutes) {
-    notes.push(`Estimated build time: ${instructions.estimatedBuildTimeMinutes} minute(s).`);
-  }
+  artifacts = { code, diagram, libraries, instructions };
+  notes.push(...blackboard.notes);
+
+  await stage({ components: selections, hardwarePlan }, 'hardware');
+  await stage({ pinAssignments: assignments }, 'pins');
+  await stage({ wiring }, 'wiring');
+  await stage({ softwarePlan }, 'software');
   await stage({ artifacts }, 'instructions');
 
   /* --- Done --------------------------------------------------------------- */
