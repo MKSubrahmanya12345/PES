@@ -190,7 +190,8 @@ interface ResolvedState {
   origin: { x: number; y: number; z: number };
 }
 
-export default function LiveGround(): JSX.Element | null {
+export function LiveGround(): JSX.Element | null {
+
   const [activeSpec, setActiveSpec] = useState<AssemblySpec>(EMPTY_ASSEMBLY);
   const laidRef = useRef(false);
   const resolvedRef = useRef<ResolvedState | null>(null);
@@ -382,3 +383,6 @@ export default function LiveGround(): JSX.Element | null {
   if (!chassisMesh) return null;
   return <primitive object={chassisMesh} ref={chassisGroupRef} />;
 }
+
+
+export default LiveGround;
