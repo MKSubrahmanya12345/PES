@@ -30,6 +30,8 @@
     "verify:3d-live": "tsx scripts/verify-3d-live.ts",
     "verify:everflow": "tsx scripts/verify-everflow.ts",
     "verify:graph": "tsx scripts/verify-graph.ts",
+    "verify:skeleton": "tsx scripts/verify-software-skeleton.ts",
+    "verify:terminal": "tsx scripts/verify-terminal.ts",
     "export:cad-catalog": "tsx scripts/export-cad-catalog-to-velxio.ts",
     "export:cad-models": "tsx scripts/export-cad-models-to-velxio.ts",
     "export:element-properties": "tsx scripts/export-element-properties-to-velxio.ts",

@@ -76,12 +76,16 @@ export async function GET(_request: NextRequest, context: RouteContext) {
             slug: bundle.software.slug,
             devPort: bundle.software.devPort,
             contract: bundle.software.contract,
+            // The skeleton spec, so the page can show what the site is made of
+            // (and say "this is not a fixed dashboard" with evidence).
+            surface: bundle.software.surface,
             files: bundle.software.files.map((file) => ({ path: file.path, bytes: file.content.length })),
             findings: bundle.software.findings,
             passed: bundle.software.passed,
             notes: bundle.software.notes,
             generatedAt: bundle.software.generatedAt,
             zipUrl: `/api/projects/${project.id}/simulation/software.zip`,
+            writeUrl: `/api/projects/${project.id}/software/write`,
           }
         : null,
       blocked: bundle.blocked,

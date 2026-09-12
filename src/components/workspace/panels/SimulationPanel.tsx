@@ -42,7 +42,7 @@ import { useDashboardRelay } from '../dashboard-relay';
 type View = 'simulation' | 'website';
 
 export function SimulationPanel() {
-  const { project, running, details, refresh } = useHub();
+  const { project, running, details, refresh, checks, dockOpen, openDock } = useHub();
   const projectId = project?.id ?? null;
 
   const [payload, setPayload] = useState<SimulationPayload | null>(null);
@@ -233,7 +233,17 @@ export function SimulationPanel() {
         </section>
 
         <section className={view === 'website' ? 'sim__half' : 'sim__half sim__half--hidden'} aria-hidden={view !== 'website'}>
-          <WebsiteHalf payload={payload} websiteUrl={websiteUrl} frameRef={dashboard.frameRef} attached={dashboard.attached} details={details} />
+          <WebsiteHalf
+            payload={payload}
+            websiteUrl={websiteUrl}
+            frameRef={dashboard.frameRef}
+            attached={dashboard.attached}
+            details={details}
+            checksPassed={checks.passed}
+            checksLabel={checks.label}
+            dockOpen={dockOpen}
+            onOpenDock={openDock}
+          />
         </section>
       </div>
     </div>
@@ -389,35 +399,63 @@ function WebsiteHalf({
   frameRef,
   attached,
   details,
+  checksPassed,
+  checksLabel,
+  dockOpen,
+  onOpenDock,
 }: {
   payload: SimulationPayload;
   websiteUrl: string | null;
   frameRef: (node: HTMLIFrameElement | null) => void;
   attached: boolean;
   details: boolean;
+  checksPassed: boolean;
+  checksLabel: string;
+  dockOpen: boolean;
+  onOpenDock: () => void;
 }) {
   const software = payload.software;
   const errors = software?.findings.filter((finding) => finding.severity === 'error') ?? [];
   const warnings = software?.findings.filter((finding) => finding.severity === 'warning') ?? [];
+  const infos = software?.findings.filter((finding) => finding.severity === 'info') ?? [];
   const bytes = useMemo(
     () => (software ? software.files.reduce((total, file) => total + file.bytes, 0) : 0),
     [software],
   );
+  const surface = software?.surface ?? null;
+  const enabledBlocks = surface?.blocks.filter((block) => block.enabled) ?? [];
 
   return (
     <>
       <div className="sim__head">
         <div>
-          <SectionTitle>Generated dashboard — your dev server at {websiteUrl}</SectionTitle>
+          <SectionTitle>Generated website — your dev server at {websiteUrl}</SectionTitle>
           <p className="faint">
             {software
-              ? `${software.files.length} file(s), ${Math.round(bytes / 1024)} kB of source. Generated and statically checked — never installed or built by Wireup.`
+              ? `${software.files.length} file(s), ${Math.round(bytes / 1024)} kB of source. A skeleton, not a fixed dashboard: ${
+                  surface ? `${surface.blocks.length} block(s) in a ${surface.layout} layout, described by src/surface.ts` : 'described by its surface spec'
+                }. Generated and statically checked — never installed or built by Wireup.`
               : payload.blocked.software}
           </p>
         </div>
         <span className="sim__spacer" />
         {software ? (
-          <a className="btn btn--sm btn--primary" href={software.zipUrl} download>
+          <button
+            type="button"
+            className="btn btn--sm btn--primary"
+            onClick={onOpenDock}
+            disabled={dockOpen}
+            title={
+              checksPassed
+                ? 'Pick a folder — the terminal runs npm install then npm run dev and streams it here'
+                : `Waiting on the build's checks: ${checksLabel}`
+            }
+          >
+            {dockOpen ? 'terminal open' : checksPassed ? 'run it — terminal' : 'terminal waiting'}
+          </button>
+        ) : null}
+        {software ? (
+          <a className="btn btn--sm" href={software.zipUrl} download>
             download the zip
           </a>
         ) : null}
@@ -432,8 +470,47 @@ function WebsiteHalf({
             {warnings.length > 0 ? <Badge tone="warn">{warnings.length} warning(s)</Badge> : null}
             <Badge tone="neutral">{software.contract.metrics.length} reading(s)</Badge>
             <Badge tone="neutral">{software.contract.commands.length} control(s)</Badge>
+            {surface ? <Badge tone="neutral">layout: {surface.layout}</Badge> : null}
+            {surface ? (
+              <Badge tone="neutral">
+                {enabledBlocks.length}/{surface.blocks.length} block(s) on
+              </Badge>
+            ) : null}
+            {infos.length > 0 ? <Badge tone="neutral">{infos.length} note(s)</Badge> : null}
             <Badge tone={attached ? 'ok' : 'neutral'}>{attached ? 'relay attached' : 'relay waiting'}</Badge>
           </div>
+
+          {surface ? (
+            <details className="sim__surface">
+              <summary>the skeleton spec — what the site is made of (src/surface.ts)</summary>
+              <table className="sim__table">
+                <thead>
+                  <tr>
+                    <th>block</th>
+                    <th>kind</th>
+                    <th>on</th>
+                    <th>reads</th>
+                    <th>sends</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {surface.blocks.map((block) => (
+                    <tr key={block.id} className={block.enabled ? undefined : 'sim__row-off'}>
+                      <td className="mono-sm">{block.id}</td>
+                      <td className="mono-sm">{block.kind}</td>
+                      <td>{block.enabled ? 'yes' : 'no'}</td>
+                      <td className="mono-sm">{block.fields.length > 0 ? block.fields.join(', ') : '—'}</td>
+                      <td className="mono-sm">{block.characters.length > 0 ? block.characters.join(' ') : '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <p className="faint">
+                Reorder these, switch one off, change the layout, or add a block with your own kind and register it in{' '}
+                <code>src/skeleton/registry.tsx</code>. Nothing downstream assumes the result is a dashboard.
+              </p>
+            </details>
+          ) : null}
 
           {errors.length > 0 ? (
             <Notice tone="err" title="Static validation found problems">
@@ -466,11 +543,20 @@ function WebsiteHalf({
           <iframe ref={frameRef} className="sim__frame" src={websiteUrl} title="Generated dashboard" />
           {!attached ? (
             <div className="sim__overlay">
-              <strong>Waiting for the dashboard at {websiteUrl}</strong>
+              <strong>Waiting for the website at {websiteUrl}</strong>
               <p className="faint">
-                Download the zip above, then <code>npm install &amp;&amp; npm run dev</code> in the unzipped folder. It
-                binds port 5175 and attaches to this page automatically — the emulator's serial output starts
-                flowing into it the moment it does.
+                {checksPassed ? (
+                  <>
+                    Press <strong>run it — terminal</strong> above, pick the folder, and Wireup runs{' '}
+                    <code>npm install</code> then <code>npm run dev</code> for you, streaming the output into the dock.
+                    It binds port 5175 and attaches to this page the moment it is up.
+                  </>
+                ) : (
+                  <>
+                    The terminal opens itself once the build's checks pass — right now: {checksLabel}. Until then you can
+                    download the zip and run <code>npm install &amp;&amp; npm run dev</code> by hand.
+                  </>
+                )}
               </p>
             </div>
           ) : null}

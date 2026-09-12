@@ -28,6 +28,7 @@ import { BuildPackButton } from './BuildPackButton';
 import { IntakeSession } from '@/components/everflow/IntakeSession';
 import { DrawerVeil, HumanDrawers, type DrawerSide } from './HumanDrawers';
 import { SimulationPanel } from './panels/SimulationPanel';
+import { TerminalDock } from './TerminalDock';
 
 const TABS = [
   { href: '', label: 'Overview', short: 'Overview' },
@@ -122,6 +123,11 @@ export function ProjectHub({ projectId, initial, children }: { projectId: string
   const stream = useProjectStream(projectId, initial);
   const [details, setDetails] = useState(false);
   const [drawer, setDrawer] = useState<DrawerSide | null>(null);
+  const [dockOpen, setDockOpen] = useState(false);
+
+  const openDock = useCallback(() => setDockOpen(true), []);
+  const closeDock = useCallback(() => setDockOpen(false), []);
+  const toggleDock = useCallback(() => setDockOpen((current) => !current), []);
 
   const project = stream.project;
   const base = `/project/${projectId}`;
@@ -139,11 +145,6 @@ export function ProjectHub({ projectId, initial, children }: { projectId: string
 
   const toggleDetails = useCallback(() => setDetails((current) => !current), []);
 
-  const value: HubValue = useMemo(
-    () => ({ ...stream, details, toggleDetails }),
-    [stream, details, toggleDetails],
-  );
-
   const openAsks = project?.humanTasks?.filter((task) => task.direction === 'ai_to_human' && task.status === 'open').length ?? 0;
   const steps = buildSteps(project);
   const status = project?.status ?? 'pending';
@@ -155,6 +156,48 @@ export function ProjectHub({ projectId, initial, children }: { projectId: string
       (project.artifacts.code || project.artifacts.diagram || project.artifacts.instructions || project.artifacts.libraries || project.components.length > 0),
   );
   const stage = humanStageLabel(stream.stage);
+
+  /* ── The gate the terminal watches ─────────────────────────────────────────
+     "All checks passed" is not a vibe: it is the validation gate the build
+     already runs (no blocking issues) plus the two facts that make running
+     anything meaningful — the run is finished, and there is firmware to have
+     generated a website from. Until then the dock stays closed and says why. */
+  const checks = useMemo(() => {
+    if (!project) return { passed: false, label: 'loading the build', detail: '' };
+    if (isIntake(status)) {
+      return { passed: false, label: 'still settling the brief with you', detail: 'The terminal starts once the build has been checked.' };
+    }
+    if (inProgress) {
+      return { passed: false, label: 'the build is still running', detail: `Stage: ${stage}.` };
+    }
+    if (!project.artifacts?.code) {
+      return { passed: false, label: 'no firmware has been generated yet', detail: 'Nothing to build a website from.' };
+    }
+    const validation = project.validation;
+    if (!validation) {
+      return { passed: false, label: 'the build has not been checked yet', detail: 'Open Check & fix to run the gate.' };
+    }
+    if (!validation.passed) {
+      const errors = validation.summary?.errors ?? validation.issues.filter((issue) => issue.severity === 'error').length;
+      return {
+        passed: false,
+        label: `${errors} blocking ${errors === 1 ? 'issue' : 'issues'} still open`,
+        detail: 'Fix them on the Check & fix tab — the terminal opens itself the moment the gate passes.',
+      };
+    }
+    const summary = validation.summary;
+    return {
+      passed: true,
+      label: summary ? `${summary.checksPassed}/${summary.checksRun} checks passed` : 'all checks passed',
+      detail: summary && summary.warnings > 0 ? `${summary.warnings} warning(s) — not blocking.` : 'Nothing blocking.',
+    };
+  }, [project, status, inProgress, stage]);
+
+  const value: HubValue = useMemo(
+    () => ({ ...stream, details, toggleDetails, dockOpen, openDock, closeDock, toggleDock, checks }),
+    [stream, details, toggleDetails, dockOpen, openDock, closeDock, toggleDock, checks],
+  );
+
   const headline = statusPhrase(status);
   const subhead = inProgress
     ? `We're ${stage.toLowerCase()} right now.`
@@ -219,6 +262,16 @@ export function ProjectHub({ projectId, initial, children }: { projectId: string
           )}
 
           <BuildPackButton projectId={projectId} disabled={!canExport} />
+
+          <button
+            type="button"
+            className={`btn btn--sm${dockOpen ? ' btn--on' : ''}${checks.passed && !dockOpen ? ' btn--attention' : ''}`}
+            onClick={toggleDock}
+            title={checks.passed ? 'Terminal — installs and runs the generated website' : `Terminal — waiting: ${checks.label}`}
+          >
+            {'>_\u2009terminal'}
+            {checks.passed ? '' : ' · waiting'}
+          </button>
 
           <Link href={`${base}/log`} className="btn btn--ghost btn--sm">
             run log
@@ -319,6 +372,11 @@ export function ProjectHub({ projectId, initial, children }: { projectId: string
       </main>
         </>
       )}
+
+      {/* The terminal: opens itself once the checks pass, then installs and
+          runs whatever folder the user picks. Mounted once, at the hub, so it
+          survives tab switches mid-install. */}
+      <TerminalDock projectId={projectId} open={dockOpen} onOpenChange={setDockOpen} checks={checks} />
 
       {/* The two drawers — same live project, no second poll. */}
       <DrawerVeil open={drawer !== null} onClose={() => setDrawer(null)} />
