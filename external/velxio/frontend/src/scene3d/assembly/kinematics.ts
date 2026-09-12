@@ -8,7 +8,7 @@
  * `stepChassis()`. The agent picks the model via AssemblySpec.kinematics.model.
  */
 
-import type { AssemblySpec } from './assembly/assemblyTypes';
+import type { AssemblySpec } from './assemblyTypes';
 
 export interface ChassisPose {
   x: number;

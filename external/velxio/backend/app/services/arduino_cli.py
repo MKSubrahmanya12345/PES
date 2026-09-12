@@ -18,6 +18,14 @@ _MISSING_HEADER_RE = re.compile(
     r"fatal error:\s*\S+\.h(?:pp)?:\s*No such file or directory", re.IGNORECASE
 )
 
+_HEADER_LIBRARY_REQUIREMENTS: dict[str, tuple[str, ...]] = {
+    "Adafruit_MPU6050.h": (
+        "Adafruit MPU6050",
+        "Adafruit Unified Sensor",
+        "Adafruit BusIO",
+    ),
+}
+
 
 def _looks_like_missing_header(stderr: str | None) -> bool:
     return bool(stderr and _MISSING_HEADER_RE.search(stderr))
@@ -394,6 +402,41 @@ class ArduinoCLIService:
         """
         return "esp32c3" in fqbn or "xiao-esp32-c3" in fqbn or "aitewinrobot-esp32c3-supermini" in fqbn
 
+    async def _ensure_source_libraries(self, files: list[dict]) -> dict | None:
+        includes = {
+            line.split("<", 1)[1].split(">", 1)[0].strip()
+            for file in files
+            for line in file.get("content", "").splitlines()
+            if "#include <" in line and ">" in line
+        }
+        required = {
+            library
+            for header, libraries in _HEADER_LIBRARY_REQUIREMENTS.items()
+            if header in includes
+            for library in libraries
+        }
+        if not required:
+            return None
+
+        def _list_libraries():
+            return subprocess.run(
+                [self.cli_path, "lib", "list"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+
+        installed = await asyncio.to_thread(_list_libraries)
+        installed_text = installed.stdout if installed.returncode == 0 else ""
+        for library in sorted(required):
+            if re.search(rf"^\s*{re.escape(library)}\s+", installed_text, re.MULTILINE):
+                continue
+            result = await self.install_library(library)
+            if not result.get("success"):
+                return result
+        return None
+
     async def compile(
         self,
         files: list[dict],
@@ -431,6 +474,15 @@ class ArduinoCLIService:
         print(f"\n=== Starting compilation ===")
         print(f"Board: {board_fqbn}")
         print(f"Files: {[f['name'] for f in files]}")
+
+        library_error = await self._ensure_source_libraries(files)
+        if library_error is not None:
+            return {
+                "success": False,
+                "error": library_error.get("error", "Required Arduino library is unavailable"),
+                "stdout": library_error.get("stdout", ""),
+                "stderr": library_error.get("stderr", ""),
+            }
 
         # Create temporary directory for sketch
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -540,6 +592,12 @@ class ArduinoCLIService:
                            "--output-dir", str(build_dir),
                            str(sketch_dir)]
                 print(f"Running command: {' '.join(cmd)}")
+
+                # Add wireup firmware shim headers to include path
+                wireup_shim_dir = Path(__file__).parent.parent.parent.parent / "scripts" / "firmware-shim"
+                if wireup_shim_dir.exists():
+                    cmd.extend(["--build-property", f"compiler.cpp.extra_flags=-I{wireup_shim_dir}"])
+                    cmd.extend(["--build-property", f"compiler.c.extra_flags=-I{wireup_shim_dir}"])
 
                 # Use subprocess.run in a thread for Windows compatibility
                 def run_compile():
