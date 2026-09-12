@@ -5,6 +5,7 @@
  * and relative URLs only, so the UI works behind any proxy/host.
  */
 
+import type { AssemblyBundleView } from '@/types/assembly';
 import type { AgentEvent } from '@/types/generation';
 import type { ChatDiff, ChatMessage, ProjectState } from '@/types/project';
 import type { AtlasTargetSpec, ProjectAtlasState } from '@/types/project-atlas';
@@ -183,12 +184,27 @@ export interface SimulationPayload {
     /** POST { cwd } — write the site into a folder so the terminal can run it. */
     writeUrl: string;
   } | null;
+  /** The 3D shape, pushed into the emulator so parts assemble as the product. */
+  assembly: AssemblyBundleView | null;
   blocked: { velxio: string | null; software: string | null };
 }
 
 export async function fetchSimulation(id: string): Promise<SimulationPayload> {
   const response = await fetch(`/api/projects/${encodeURIComponent(id)}/simulation`, { cache: 'no-store' });
   return unwrap<SimulationPayload>(response);
+}
+
+/** Re-plan the 3D shape from the current diagram (the model authors a fresh shape by default). */
+export async function regenerateAssembly(
+  id: string,
+  mode: 'auto' | 'model' | 'heuristic' = 'auto',
+): Promise<{ assembly: AssemblyBundleView | null }> {
+  const response = await fetch(`/api/projects/${encodeURIComponent(id)}/assembly`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ mode }),
+  });
+  return unwrap<{ assembly: AssemblyBundleView | null }>(response);
 }
 
 export interface CanvasSyncPayload {

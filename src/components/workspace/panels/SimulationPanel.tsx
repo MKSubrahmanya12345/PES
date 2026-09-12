@@ -31,11 +31,11 @@
  * browser-side by necessity as well as by design.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { Badge, Card, Empty, Loader, Notice, SectionTitle } from '../ui';
 import { useHub } from '../hub-context';
-import { fetchSimulation, syncCanvas, type SimulationPayload } from '../api';
+import { fetchSimulation, regenerateAssembly, syncCanvas, type SimulationPayload } from '../api';
 import { useVelxioBridge } from '../velxio-bridge';
 import { useDashboardRelay } from '../dashboard-relay';
 
@@ -51,6 +51,8 @@ export function SimulationPanel() {
   const [view, setView] = useState<View>('simulation');
   const [syncNote, setSyncNote] = useState<{ tone: 'ok' | 'err'; text: string } | null>(null);
   const [syncing, setSyncing] = useState(false);
+  const [reassembling, setReassembling] = useState(false);
+  const [assemblyNote, setAssemblyNote] = useState<{ tone: 'ok' | 'err'; text: string } | null>(null);
 
   /* ── Load the bundle ---------------------------------------------------- */
   const load = useCallback(async () => {
@@ -115,6 +117,20 @@ export function SimulationPanel() {
     velxio.run();
   }, [velxio.pushCount, velxio.subscribeSerial, velxio.run]);
 
+  // The 3D shape follows the circuit onto the canvas: once the build is
+  // pushed, the assembly spec tells LiveGround to seat the parts as the
+  // product (car, drone, …) instead of bench rows. Keyed on push × spec so a
+  // re-planned shape re-pushes onto the same canvas.
+  const assemblyJson = payload?.assembly ? JSON.stringify(payload.assembly.spec) : null;
+  const lastAssemblyPush = useRef<string | null>(null);
+  useEffect(() => {
+    if (velxio.pushCount === 0 || !assemblyJson) return;
+    const key = `${velxio.pushCount}:${assemblyJson}`;
+    if (lastAssemblyPush.current === key) return;
+    lastAssemblyPush.current = key;
+    velxio.setAssembly(JSON.parse(assemblyJson) as Record<string, unknown>);
+  }, [velxio.pushCount, assemblyJson, velxio.setAssembly]);
+
   /* ── Canvas → diagram.json --------------------------------------------- */
   const pullCanvas = useCallback(async () => {
     if (!projectId) return;
@@ -138,6 +154,26 @@ export function SimulationPanel() {
       setSyncing(false);
     }
   }, [projectId, velxio, refresh, load]);
+
+  /* ── Re-plan the 3D shape ---------------------------------------------- */
+  const reassemble = useCallback(async () => {
+    if (!projectId) return;
+    setReassembling(true);
+    setAssemblyNote(null);
+    try {
+      await regenerateAssembly(projectId, 'auto');
+      await refresh();
+      await load();
+      setAssemblyNote({ tone: 'ok', text: 'New 3D shape planned — pushing it onto the canvas.' });
+    } catch (error) {
+      setAssemblyNote({
+        tone: 'err',
+        text: error instanceof Error ? error.message : 'Re-planning the 3D shape failed.',
+      });
+    } finally {
+      setReassembling(false);
+    }
+  }, [projectId, refresh, load]);
 
   /* ── Render ------------------------------------------------------------- */
   if (loading && !payload) {
@@ -228,6 +264,9 @@ export function SimulationPanel() {
             onPull={() => void pullCanvas()}
             syncing={syncing}
             syncNote={syncNote}
+            onReassemble={() => void reassemble()}
+            reassembling={reassembling}
+            assemblyNote={assemblyNote}
             details={details}
           />
         </section>
@@ -263,6 +302,9 @@ function SimulationHalf({
   onPull,
   syncing,
   syncNote,
+  onReassemble,
+  reassembling,
+  assemblyNote,
   details,
 }: {
   payload: SimulationPayload;
@@ -273,9 +315,13 @@ function SimulationHalf({
   onPull: () => void;
   syncing: boolean;
   syncNote: { tone: 'ok' | 'err'; text: string } | null;
+  onReassemble: () => void;
+  reassembling: boolean;
+  assemblyNote: { tone: 'ok' | 'err'; text: string } | null;
   details: boolean;
 }) {
   const velxio = payload.velxio;
+  const assembly = payload.assembly;
 
   return (
     <>
@@ -291,12 +337,45 @@ function SimulationHalf({
                 }, pushed and built on the canvas automatically.`
               : payload.blocked.velxio}
           </p>
+          {assembly ? (
+            <p className="faint">
+              🧩 3D shape: <strong>{assembly.label}</strong>
+              {assembly.archetype === 'static_bench'
+                ? ' — parts stay on the bench grid.'
+                : ` — ${assembly.placed}/${assembly.total} part(s) seated on the chassis${assembly.source === 'model' ? ' (planned by the model)' : ''}.`}
+            </p>
+          ) : null}
         </div>
         <span className="sim__spacer" />
+        <button
+          type="button"
+          className="btn btn--sm"
+          onClick={onReassemble}
+          disabled={reassembling || !velxio}
+          title="Plan a fresh 3D shape from the current diagram and push it onto the canvas"
+        >
+          {reassembling ? 're-assembling…' : 're-assemble in 3D'}
+        </button>
         <button type="button" className="btn btn--sm" onClick={onPull} disabled={syncing || status.state === 'idle'}>
           {syncing ? 'pulling…' : 'pull canvas → diagram.json'}
         </button>
       </div>
+
+      {assemblyNote ? (
+        <Notice tone={assemblyNote.tone === 'ok' ? 'ok' : 'err'} title={assemblyNote.tone === 'ok' ? 'Shape re-planned' : 'Re-assemble failed'}>
+          {assemblyNote.text}
+        </Notice>
+      ) : null}
+
+      {assembly && assembly.warnings.length > 0 ? (
+        <Notice tone="warn" title={`${assembly.warnings.length} 3D assembly warning(s)`}>
+          <ul className="sim__list">
+            {assembly.warnings.map((entry) => (
+              <li key={entry}>{entry}</li>
+            ))}
+          </ul>
+        </Notice>
+      ) : null}
 
       {runError ? (
         <Notice tone="err" title="The pushed firmware did not build">

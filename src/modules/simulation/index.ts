@@ -8,11 +8,18 @@
  * invalidating a cache.
  */
 
+import type { AssemblyBundleView, AssemblyPlacement } from '@/types/assembly';
 import type { ProjectState } from '@/types/project';
 
 import { generateSoftware, slugify, type SoftwareArtifact } from '@/modules/software-generator';
+import {
+  heuristicAssembly,
+  pruneAssemblyToIds,
+  rosterFromDiagram,
+  translateAssemblyForVlx,
+} from '@/modules/assembly-planner';
 
-import { generateVelxioProject, type VelxioProjectResult } from './velxio-project';
+import { generateVelxioProject, VLX_BOARD_ID, type VelxioProjectResult } from './velxio-project';
 
 export interface SimulationBundle {
   projectId: string;
@@ -23,6 +30,8 @@ export interface SimulationBundle {
   velxio: VelxioProjectResult | null;
   /** Null when the project has no firmware yet. */
   software: SoftwareArtifact | null;
+  /** The 3D shape, pruned to the current diagram. Null without a diagram. */
+  assembly: AssemblyBundleView | null;
   /** Why a half is missing, in the user's terms. */
   blocked: { velxio: string | null; software: string | null };
 }
@@ -35,12 +44,76 @@ function controllerName(project: ProjectState): string {
   return mcu?.name ?? 'the controller';
 }
 
+/**
+ * The assembly view for the bundle: the persisted plan pruned to the diagram
+ * instances that still exist, with its spec translated to Velxio ids. Builds
+ * that predate the assembly stage get the deterministic shape derived on read
+ * (pure function of the diagram — stable without persisting anything).
+ */
+export function buildAssemblyView(project: ProjectState): {
+  view: AssemblyBundleView | null;
+  placements: Record<string, AssemblyPlacement>;
+} {
+  const diagram = project.artifacts.diagram;
+  if (!diagram) return { view: null, placements: {} };
+  const roster = rosterFromDiagram(diagram);
+  if (roster.length === 0) return { view: null, placements: {} };
+
+  const readNotes: string[] = [];
+  let plan = project.assembly;
+  if (!plan) {
+    plan = heuristicAssembly({
+      roster,
+      prompt: project.prompt,
+      goal: project.requirements?.goal ?? project.name,
+    });
+    readNotes.push('Assembled on read — this build predates the assembly stage, so the deterministic shape applies.');
+  }
+  const ids = new Set(diagram.components.map((component) => component.id));
+  const pruned = pruneAssemblyToIds(plan, ids);
+  if (pruned.dropped.length > 0) {
+    readNotes.push(
+      `${pruned.dropped.length} stale seat(s) pruned (the diagram changed after the assembly was planned).`,
+    );
+  }
+
+  const controller = diagram.components.find((component) => component.category === 'microcontroller');
+  const controllerId = controller?.id ?? null;
+  const spec = translateAssemblyForVlx(pruned.plan, (id) => (controllerId && id === controllerId ? VLX_BOARD_ID : id));
+
+  // The board carries no properties bag in `.vlx`, so its seat travels in the
+  // pushed spec only; every other seat is baked into its component.
+  const placements: Record<string, AssemblyPlacement> = {};
+  for (const [id, seat] of Object.entries(pruned.plan.placements)) {
+    if (controllerId && id === controllerId) continue;
+    placements[id] = seat;
+  }
+
+  const seated = new Set([...Object.keys(pruned.plan.placements), ...pruned.plan.parametric]);
+  return {
+    placements,
+    view: {
+      spec,
+      archetype: pruned.plan.archetype,
+      label: pruned.plan.label,
+      source: pruned.plan.source,
+      placed: seated.size,
+      total: roster.length,
+      parametric: pruned.plan.parametric,
+      unplaced: pruned.plan.unplaced,
+      notes: [...readNotes, ...pruned.plan.notes],
+      warnings: pruned.plan.warnings,
+    },
+  };
+}
+
 export function buildSimulationBundle(project: ProjectState): SimulationBundle {
   const diagram = project.artifacts.diagram;
   const code = project.artifacts.code;
   const libraries = project.artifacts.libraries?.libraries.map((library) => library.name) ?? [];
 
   const blocked: SimulationBundle['blocked'] = { velxio: null, software: null };
+  const assembly = buildAssemblyView(project);
 
   let velxio: VelxioProjectResult | null = null;
   if (!diagram) {
@@ -55,6 +128,7 @@ export function buildSimulationBundle(project: ProjectState): SimulationBundle {
       files: code?.files ?? [],
       ...(code?.entryPoint ? { entryPoint: code.entryPoint } : {}),
       libraries,
+      assemblyPlacements: assembly.placements,
     });
   }
 
@@ -81,6 +155,7 @@ export function buildSimulationBundle(project: ProjectState): SimulationBundle {
     revision: project.revision,
     velxio,
     software,
+    assembly: assembly.view,
     blocked,
   };
 }

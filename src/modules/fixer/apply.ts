@@ -118,6 +118,7 @@ interface Working {
   diagram: Diagram | null;
   libraries: LibrariesArtifact | null;
   instructions: InstructionsArtifact | null;
+  assembly: ProjectState['assembly'];
 }
 
 const POWER_COLOR = '#c62828';
@@ -140,6 +141,7 @@ function workingFrom(project: ProjectState): Working {
     diagram: project.artifacts.diagram ? clone(project.artifacts.diagram) : null,
     libraries: project.artifacts.libraries ? clone(project.artifacts.libraries) : null,
     instructions: project.artifacts.instructions ? clone(project.artifacts.instructions) : null,
+    assembly: project.assembly ? clone(project.assembly) : null,
   };
 }
 
@@ -834,6 +836,40 @@ export async function applyChanges(input: ApplyInput): Promise<ApplyOutput> {
           break;
         }
 
+        /* --------------------------- assembly --------------------------- */
+        case 'prune_assembly': {
+          if (!working.assembly) {
+            refuse(change, 'there is no 3D assembly to prune');
+            break;
+          }
+          const roles = change.roles ?? [];
+          const ids = new Set(change.instanceIds ?? []);
+          let cut = 0;
+          for (const role of roles) {
+            if (working.assembly.bindings[role as keyof typeof working.assembly.bindings] !== undefined) {
+              delete working.assembly.bindings[role as keyof typeof working.assembly.bindings];
+              cut += 1;
+            }
+          }
+          for (const id of ids) {
+            if (working.assembly.placements[id] !== undefined) {
+              delete working.assembly.placements[id];
+              cut += 1;
+            }
+          }
+          const before = working.assembly.parametric.length;
+          working.assembly.parametric = working.assembly.parametric.filter((id) => !ids.has(id));
+          cut += before - working.assembly.parametric.length;
+          // Keep the pushed spec's bindings identical to the pruned map.
+          working.assembly.spec = { ...working.assembly.spec, bindings: { ...working.assembly.bindings } };
+          if (cut === 0) {
+            refuse(change, 'no stale 3D seats matched');
+            break;
+          }
+          record(change, `pruned ${cut} stale 3D seat(s); the parts fall back to the bench grid`);
+          break;
+        }
+
         /* --------------------------- rerun stage ------------------------ */
         case 'rerun_stage': {
           requestStage(change.stage, change.force === true);
@@ -1008,6 +1044,7 @@ function snapshot(working: Working, base: ProjectState): ProjectState {
       libraries: working.libraries,
       instructions: working.instructions,
     },
+    assembly: working.assembly,
     updatedAt: nowIso(),
   };
 }
@@ -1023,6 +1060,7 @@ function adopt(working: Working, project: ProjectState): void {
   working.diagram = project.artifacts.diagram;
   working.libraries = project.artifacts.libraries;
   working.instructions = project.artifacts.instructions;
+  working.assembly = project.assembly;
 }
 
 async function runRefresh(

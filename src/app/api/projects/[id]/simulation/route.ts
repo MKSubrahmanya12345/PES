@@ -88,6 +88,7 @@ export async function GET(_request: NextRequest, context: RouteContext) {
             writeUrl: `/api/projects/${project.id}/software/write`,
           }
         : null,
+      assembly: bundle.assembly,
       blocked: bundle.blocked,
     });
   } catch (error) {

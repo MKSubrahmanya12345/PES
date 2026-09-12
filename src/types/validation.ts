@@ -16,7 +16,8 @@ export type ValidationDomain =
   | 'libraries'
   | 'instructions'
   | 'behavior'
-  | 'structure';
+  | 'structure'
+  | 'assembly';
 
 /** Artifact kinds addressable by a fix change. */
 export type ArtifactKind =
@@ -29,7 +30,8 @@ export type ArtifactKind =
   | 'code'
   | 'diagram'
   | 'libraries'
-  | 'instructions';
+  | 'instructions'
+  | 'assembly';
 
 export interface IssueTarget {
   artifact: ArtifactKind;
@@ -94,6 +96,9 @@ export type ValidationIssueCode =
   | 'quantity_shortfall'
   | 'behavioral_assertion_failed'
   | 'sim_behavior_mismatch'
+  | 'assembly_unknown_part'
+  | 'assembly_bad_placement'
+  | 'assembly_overlap'
   | 'sim_execution_unavailable'
   | 'model_review';
 

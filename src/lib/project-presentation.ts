@@ -25,6 +25,7 @@ const STAGE_LABEL: Record<GenerationStage, string> = {
   code: 'Writing the firmware',
   libraries: 'Adding the libraries',
   diagram: 'Drawing the diagram',
+  assembly: 'Assembling it in 3D',
   instructions: 'Writing your build guide',
   validating: 'Checking the build',
   fixing: 'Repairing a few issues',

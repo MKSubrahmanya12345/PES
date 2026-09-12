@@ -10,11 +10,14 @@
  */
 
 import {
+  ASSEMBLY_PERSONA,
+  buildAssemblyUserPrompt,
   buildFixUserPrompt,
   buildGenerationUserPrompt,
   buildIntakeUserPrompt,
   buildValidationUserPrompt,
   ENGINEER_PERSONA,
+  type AssemblyPromptInput,
   type FixPromptInput,
   type GenerationPromptInput,
   type IntakePromptInput,
@@ -179,6 +182,18 @@ export async function proposeDecisionPower(input: { nodeLabel: string; nodeConte
     effort: parseEffort(env().models.effortR2, defaultEffort('idea_r2')),
   });
   return { ...result, op: 'idea_expansion' };
+}
+
+/** 3D assembly — the model authors the shape the parts assemble into. */
+export async function proposeAssembly(input: AssemblyPromptInput): Promise<BedrockOperationResult> {
+  const result = await runStructuredCall({
+    op: 'assembly',
+    system: [ENGINEER_PERSONA, ASSEMBLY_PERSONA],
+    user: buildAssemblyUserPrompt(input),
+    temperature: 0.2,
+    effort: defaultEffort('assembly'),
+  });
+  return { ...result, op: 'assembly' };
 }
 
 /** The fresh-context reviewer (Part of the idea graph): brief + graph + test results ONLY. */

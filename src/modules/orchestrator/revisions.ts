@@ -22,6 +22,7 @@ export function snapshotOf(project: ProjectState): RevisionSnapshot {
     diagram: project.artifacts.diagram,
     libraries: project.artifacts.libraries,
     instructions: project.artifacts.instructions,
+    assembly: project.assembly,
   };
 }
 

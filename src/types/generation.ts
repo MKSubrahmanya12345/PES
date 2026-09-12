@@ -50,6 +50,11 @@ export type AgentEventType =
   | 'libraries_generation_completed'
   | 'diagram_generation_started'
   | 'diagram_generation_completed'
+  /** The 3D assembly planner seated the parts as the finished product. */
+  | 'assembly_started'
+  | 'assembly_completed'
+  /** The shape was re-planned on demand (POST /assembly). */
+  | 'assembly_replanned'
   | 'instructions_generation_started'
   | 'instructions_generation_completed'
   /** The dashboard website is generated + statically checked (never built here). */
@@ -272,6 +277,16 @@ export interface PatchInstructionsChange extends BaseChange {
   content: string;
 }
 
+/** Drop stale 3D seats (bindings/placements for parts that no longer exist). */
+export interface PruneAssemblyChange extends BaseChange {
+  artifact: 'assembly';
+  op: 'prune_assembly';
+  /** Binding roles to unseat. */
+  roles?: string[];
+  /** Placement/parametric instance ids to drop. */
+  instanceIds?: string[];
+}
+
 /** Ask the orchestrator to re-derive an artifact deterministically. */
 export interface RerunStageChange extends BaseChange {
   artifact: 'diagram' | 'wiring' | 'pinAssignments' | 'instructions' | 'libraries' | 'code';
@@ -304,6 +319,7 @@ export type FixChange =
   | AddLibraryChange
   | RemoveLibraryChange
   | PatchInstructionsChange
+  | PruneAssemblyChange
   | RerunStageChange;
 
 export type FixChangeOp = FixChange['op'];

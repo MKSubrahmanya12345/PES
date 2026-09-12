@@ -40,6 +40,7 @@ const ARTIFACT_KINDS: ArtifactKind[] = [
   'diagram',
   'libraries',
   'instructions',
+  'assembly',
 ];
 
 const DOMAINS: ValidationDomain[] = [
@@ -54,6 +55,7 @@ const DOMAINS: ValidationDomain[] = [
   'libraries',
   'instructions',
   'structure',
+  'assembly',
 ];
 
 /* ------------------------------------------------------------------------- */
@@ -105,8 +107,9 @@ function domainFor(value: unknown, fallback: ValidationDomain): ValidationDomain
   if (normalised.includes('librar') || normalised.includes('depend')) return 'libraries';
   if (normalised.includes('component') || normalised.includes('part') || normalised.includes('bom')) return 'components';
   if (normalised.includes('compat')) return 'compatibility';
-  if (normalised.includes('instruction') || normalised.includes('doc')) return 'instructions';
+    if (normalised.includes('instruction') || normalised.includes('doc')) return 'instructions';
   if (normalised.includes('requirement') || normalised.includes('goal')) return 'requirements';
+  if (normalised.includes('assembl') || normalised.includes('3d') || normalised.includes('chassis')) return 'assembly';
   return fallback;
 }
 
@@ -144,6 +147,8 @@ function artifactFor(value: unknown, domain: ValidationDomain): ArtifactKind {
       return 'hardwarePlan';
     case 'requirements':
       return 'requirements';
+    case 'assembly':
+      return 'assembly';
     default:
       return 'requirements';
   }

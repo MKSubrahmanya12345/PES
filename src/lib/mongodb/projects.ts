@@ -74,6 +74,7 @@ export function serializeProject(raw: RawProject): ProjectState {
     pinAssignments: Array.isArray(raw.pinAssignments) ? raw.pinAssignments : [],
     wiring: raw.wiring ?? null,
     softwarePlan: raw.softwarePlan ?? null,
+    assembly: (raw.assembly as ProjectState['assembly']) ?? null,
     artifacts: { ...EMPTY_ARTIFACTS, ...(raw.artifacts ?? {}) },
     validation: raw.validation ?? null,
     revisions: Array.isArray(raw.revisions) ? raw.revisions : [],

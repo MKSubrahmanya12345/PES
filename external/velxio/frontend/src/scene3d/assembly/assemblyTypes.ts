@@ -26,12 +26,15 @@ export interface MountPoint {
     | 'motor_1' | 'motor_2' | 'motor_3' | 'motor_4' | 'motor_5' | 'motor_6'
     | 'wheel_left'
     | 'wheel_right'
+    | 'wheel_fl' | 'wheel_fr' | 'wheel_rl' | 'wheel_rr'
     | 'caster_front' | 'caster_back'
     | 'imu'
     | 'battery'
     | 'controller'       // MCU / driver board / main PCB
     | 'sensor_front' | 'sensor_back' | 'sensor_left' | 'sensor_right'
-    | 'passenger';       // anything else rides here
+    | 'passenger'        // anything else rides here
+    | 'passenger_0' | 'passenger_1' | 'passenger_2' | 'passenger_3'
+    | 'passenger_4' | 'passenger_5' | 'passenger_6' | 'passenger_7';
   /** Local position (mm) relative to chassis origin. */
   at: Vec3;
   /** Local Y-axis rotation (degrees) applied to the mounted component. */
@@ -157,9 +160,12 @@ export const EMPTY_ASSEMBLY: AssemblySpec = {
 const ASSEMBLY_ROLES = new Set<MountPoint['role']>([
   'motor_left', 'motor_right', 'motor_fl', 'motor_fr', 'motor_rl', 'motor_rr',
   'motor_1', 'motor_2', 'motor_3', 'motor_4', 'motor_5', 'motor_6',
-  'wheel_left', 'wheel_right', 'caster_front', 'caster_back', 'imu', 'battery',
+  'wheel_left', 'wheel_right', 'wheel_fl', 'wheel_fr', 'wheel_rl', 'wheel_rr',
+  'caster_front', 'caster_back', 'imu', 'battery',
   'controller', 'sensor_front', 'sensor_back', 'sensor_left', 'sensor_right',
   'passenger',
+  'passenger_0', 'passenger_1', 'passenger_2', 'passenger_3',
+  'passenger_4', 'passenger_5', 'passenger_6', 'passenger_7',
 ]);
 
 const KINEMATICS_MODELS = new Set<KinematicsModel>([

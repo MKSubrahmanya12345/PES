@@ -148,11 +148,14 @@ function resolveBindings(spec: AssemblySpec, components: ComponentLike[]): Map<s
     const has = spec.chassis?.mounts.find((m) => m.role === key);
     if (has && !roleToId.has(key)) assign(key, propPool[i-1]?.id);
   }
-  // Passengers distribute over 'passenger' mounts.
+  // Passengers distribute over 'passenger' mounts. Explicit spec bindings
+  // (e.g. the assembly planner's exact `passenger_N` seats) keep their keys —
+  // auto-distribution only fills keys the spec did not claim.
   const passCount = (spec.chassis?.mounts.filter((m) => m.role === 'passenger') ?? []).length;
   let pi = 0;
   for (const p of passengers) {
     if (taken.has(p.id)) continue;
+    while (roleToId.has(`passenger_${pi}`)) pi++;
     roleToId.set(`passenger_${pi}`, p.id); taken.add(p.id);
     pi++;
     if (passCount > 0 && pi >= passCount * 2) break;
@@ -314,7 +317,17 @@ export function LiveGround(): JSX.Element | null {
 
     const isVertical = res.spec.chassis.shape === 'vertical_plate';
     const isAir = res.spec.kinematics?.model === 'quadcopter' || res.spec.kinematics?.model === 'hexacopter';
-    const axleY = isVertical ? 10 : 0;
+    // The tilt pivot is the wheel axle line — derive it from the wheel mounts
+    // (the archetype tables seat wheel centres at axle height) instead of a
+    // hardcoded constant, so pushed specs with exact mounts tilt correctly.
+    const wheelHeights = res.mountPositions
+      .filter((mp) => mp.role.startsWith('wheel_'))
+      .map((mp) => mp.at.y);
+    const axleY = isVertical
+      ? (wheelHeights.length > 0
+          ? wheelHeights.reduce((a, b) => a + b, 0) / wheelHeights.length
+          : 10)
+      : 0;
 
     // Update all bound components' x3d/y3d/z3d/rotY in place.
     for (const mp of res.mountPositions) {
