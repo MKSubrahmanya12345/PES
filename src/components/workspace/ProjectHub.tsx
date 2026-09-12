@@ -15,7 +15,7 @@
 
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { useCallback, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 
 import type { AgentEvent } from '@/types/generation';
 import type { GenerationStage, ProjectState } from '@/types/project';
@@ -27,6 +27,7 @@ import { StatusBadge } from './ui';
 import { BuildPackButton } from './BuildPackButton';
 import { IntakeSession } from '@/components/everflow/IntakeSession';
 import { DrawerVeil, HumanDrawers, type DrawerSide } from './HumanDrawers';
+import { SimulationPanel } from './panels/SimulationPanel';
 
 const TABS = [
   { href: '', label: 'Overview', short: 'Overview' },
@@ -130,6 +131,11 @@ export function ProjectHub({ projectId, initial, children }: { projectId: string
     if (pathname.startsWith(`${base}/`)) return pathname.slice(base.length);
     return '';
   }, [pathname, base]);
+
+  const [simulationMounted, setSimulationMounted] = useState(activeHref === '/simulation');
+  useEffect(() => {
+    if (activeHref === '/simulation') setSimulationMounted(true);
+  }, [activeHref]);
 
   const toggleDetails = useCallback(() => setDetails((current) => !current), []);
 
@@ -305,7 +311,12 @@ export function ProjectHub({ projectId, initial, children }: { projectId: string
         })}
       </nav>
 
-      <main className="hub__content">{children}</main>
+      <main className="hub__content">
+        <div className={activeHref === '/simulation' ? 'hub__route' : 'hub__route hub__route--hidden'}>
+          {simulationMounted ? <SimulationPanel /> : null}
+        </div>
+        <div className={activeHref === '/simulation' ? 'hub__route hub__route--hidden' : 'hub__route'}>{children}</div>
+      </main>
         </>
       )}
 

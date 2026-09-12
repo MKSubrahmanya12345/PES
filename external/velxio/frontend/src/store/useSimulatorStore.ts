@@ -1848,6 +1848,7 @@ export const useSimulatorStore = create<SimulatorState>((set, get) => {
         const patch: Partial<BoardInstance> = {};
         if (b.languageMode && b.languageMode !== 'arduino') patch.languageMode = b.languageMode;
         if (b.name && b.name.trim()) patch.name = b.name;
+        if (b.activeFileGroupId) patch.activeFileGroupId = b.activeFileGroupId;
         // P2.4 — restore per-board persisted fields that ride in boards_json.
         if (b.boardOptions) patch.boardOptions = b.boardOptions;
         if (b.spiffsFiles) patch.spiffsFiles = b.spiffsFiles;

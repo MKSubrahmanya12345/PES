@@ -3293,6 +3293,10 @@ body {
   gap: 12px;
 }
 
+.hub__route--hidden {
+  display: none;
+}
+
 .sim__bar {
   display: flex;
   align-items: center;
