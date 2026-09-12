@@ -5435,3 +5435,400 @@ body {
   .atlas__mapping-row { grid-template-columns: minmax(0, 1fr) 14px minmax(0, 1fr); }
   .atlas__mapping-row small { grid-column: 3; text-align: left; }
 }
+
+/* ==========================================================================
+   Everflow prominence — goal chip (topbar), tab badge, map header, the
+   "where your project stands" card on Overview. Pure presentation: all data
+   already flows through the hub stream (project.everflow.evaluation).
+   ========================================================================== */
+
+/* Goal status chip in the topbar crumb ------------------------------------ */
+
+.goal-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--bg);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.goal-chip:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.goal-chip--wait {
+  background: var(--warn-bg);
+  border-color: #e6d3ab;
+  color: var(--warn);
+}
+
+.goal-chip--wait:hover {
+  color: var(--warn);
+  background: #efe0c2;
+}
+
+.goal-chip--done {
+  background: var(--ok-bg);
+  border-color: #bcd9c6;
+  color: var(--ok);
+}
+
+.goal-chip--done:hover {
+  color: var(--ok);
+  background: #dfeadb;
+}
+
+.goal-ring {
+  flex: none;
+}
+
+/* the working state feels alive but never screams */
+.goal-chip--work .goal-ring {
+  animation: goalchip-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes goalchip-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+
+.goal-ring__track {
+  fill: none;
+  stroke: var(--border-strong);
+  opacity: 0.55;
+}
+
+.goal-ring__fill {
+  fill: none;
+  stroke-linecap: round;
+  transition: stroke-dashoffset 0.6s ease;
+}
+
+.goal-ring__fill--work {
+  stroke: var(--accent-deep);
+}
+
+.goal-ring__fill--wait {
+  stroke: var(--warn);
+}
+
+.goal-ring__fill--done {
+  stroke: var(--ok);
+}
+
+/* Live badge on the "Project map" tab -------------------------------------- */
+
+.hub__tab-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1.5px 5px;
+  border-radius: 999px;
+  font-size: 9.5px;
+  font-weight: 700;
+  line-height: 14px;
+  vertical-align: 1px;
+}
+
+.hub__tab-badge--wait {
+  background: var(--warn-bg);
+  border: 1px solid #e6d3ab;
+  color: var(--warn);
+}
+
+.hub__tab-badge--done {
+  background: var(--ok-bg);
+  border: 1px solid #bcd9c6;
+  color: var(--ok);
+}
+
+/* Everflow tab — one-line plain-language header ---------------------------- */
+
+.evf-headline {
+  max-width: 100ch;
+  margin-bottom: 12px;
+}
+
+.evf-headline .evf-eyebrow {
+  margin-bottom: 4px;
+}
+
+.evf-headline__sub {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+/* Overview — "where your project stands" ------------------------------------ */
+
+.mapcard__top {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.mapcard__ring {
+  flex: none;
+  line-height: 0;
+}
+
+.mapcard__ring-pct {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 700;
+  fill: var(--text);
+}
+
+.mapcard__status {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.45;
+  max-width: 62ch;
+}
+
+.mapcard__label {
+  display: block;
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-faint);
+  margin-bottom: 7px;
+}
+
+.mapcard__goals {
+  margin-top: 14px;
+}
+
+.mapcard__goal-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 6px;
+}
+
+.mapcard__goal {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  font-size: 12.5px;
+  min-width: 0;
+}
+
+.mapcard__goal--warn {
+  background: var(--warn-bg);
+  border-color: #e6d3ab;
+}
+
+.mapcard__goal--ok {
+  background: var(--ok-bg);
+  border-color: #cfe0d2;
+}
+
+.mapcard__goal-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--text-faint);
+}
+
+.mapcard__goal--ok .mapcard__goal-dot {
+  background: var(--ok);
+}
+
+.mapcard__goal--warn .mapcard__goal-dot {
+  background: var(--warn);
+}
+
+.mapcard__goal--info .mapcard__goal-dot {
+  background: var(--info);
+}
+
+.mapcard__goal-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mapcard__goal-verdict {
+  flex: none;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-faint);
+}
+
+.mapcard__goal--ok .mapcard__goal-verdict {
+  color: var(--ok);
+}
+
+.mapcard__goal--warn .mapcard__goal-verdict {
+  color: var(--warn);
+}
+
+.mapcard__goal--info .mapcard__goal-verdict {
+  color: var(--info);
+}
+
+.mapcard__more {
+  display: block;
+  margin-top: 7px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--text-faint);
+}
+
+.mapcard__guesses {
+  margin: 12px 0 0;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+.mapcard__openends {
+  margin: 8px 0 0;
+  font-size: 12.5px;
+  color: var(--text-faint);
+}
+
+.mapcard__brief-wrap {
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border);
+}
+
+.mapcard__brief-wrap summary {
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+
+.mapcard__brief {
+  margin-top: 10px;
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.mapcard__brief h4 {
+  margin: 12px 0 4px;
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text);
+}
+
+.mapcard__brief-line {
+  position: relative;
+  margin: 2px 0;
+  padding-left: 18px;
+  color: var(--text);
+}
+
+.mapcard__brief-line--plain {
+  padding-left: 0;
+  color: var(--text-muted);
+}
+
+.mapcard__brief-mark {
+  position: absolute;
+  left: 0;
+  font-family: var(--mono);
+  font-weight: 700;
+  color: var(--text-faint);
+}
+
+.mapcard__brief-line--ok .mapcard__brief-mark {
+  color: var(--ok);
+}
+
+.mapcard__brief-line--warn .mapcard__brief-mark {
+  color: var(--warn);
+}
+
+.mapcard__brief-mark--dot {
+  color: var(--text-faint);
+}
+
+.mapcard__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.mapcard__foot-note {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--text-faint);
+}
+
+.mapcard__pending {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.mapcard__pending p {
+  margin: 0;
+  max-width: 74ch;
+}
+
+.mapcard__running {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 10px 0 0;
+  font-size: 11.5px;
+  color: var(--text-faint);
+}
+
+@media (max-width: 640px) {
+  .goal-chip {
+    display: none;
+  }
+
+  .mapcard__top {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .mapcard__goal-list {
+    grid-template-columns: 1fr;
+  }
+}

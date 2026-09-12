@@ -4,8 +4,10 @@
  * Live project stream.
  *
  * Polls `/api/projects/[id]/events?after=<seq>` while the agent runs and
- * refetches the full project whenever a new revision lands or the run reaches a
- * terminal status. Polling backs off on transport errors and stops by itself.
+ * refetches the full project whenever a new revision lands, the run reaches a
+ * terminal status, or an everflow-state event lands (a pass, an ask, an
+ * answer, an injection — anything that moves the goal chip or the drawers).
+ * Polling backs off on transport errors and stops by itself.
  *
  * A long model call produces no events for as long as it runs, so a fixed
  * interval means hundreds of identical round trips that can never return
@@ -27,6 +29,29 @@ const MAX_POLL_MS = 8000;
 const IDLE_BACKOFF_FACTOR = 1.35;
 /** Quiet polls tolerated at full speed before backing off (~3.3s). */
 const IDLE_GRACE_POLLS = 3;
+
+/**
+ * Events that can mutate the project's everflow state — the graph, the goal
+ * evaluation, the human-channel tasks, the idea graph. When one lands, a
+ * shallow status/stage merge would leave the topbar goal chip, the overview
+ * stand card and the drawers showing the previous pass's numbers, so these
+ * also trigger a full project refetch (cheap: they are rare, pass-paced).
+ */
+const EVERFLOW_STATE_EVENTS = new Set<AgentEvent['type']>([
+  'intake_completed',
+  'intake_answered',
+  'everflow_pass',
+  'everflow_move',
+  'human_task_filed',
+  'human_task_answered',
+  'injection_registered',
+  'rebuild_started',
+  'research_completed',
+  'idea_graph_expansion',
+  'idea_graph_test',
+  'idea_graph_review',
+  'idea_graph_swarm',
+]);
 
 export interface ProjectStream {
   project: ProjectState | null;
@@ -112,8 +137,9 @@ export function useProjectStream(projectId: string, initial: ProjectState | null
 
       const revisionMoved = payload.revision !== revisionRef.current;
       revisionRef.current = payload.revision;
+      const everflowMoved = payload.events.some((event) => EVERFLOW_STATE_EVENTS.has(event.type));
 
-      if (revisionMoved || payload.terminal) {
+      if (revisionMoved || payload.terminal || everflowMoved) {
         await loadFullProject();
       } else {
         setProject((current) =>

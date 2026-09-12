@@ -356,6 +356,14 @@ export function EverflowPanel() {
 
   return (
     <section className="evf-panel" aria-label="Everflow — project graph and human channel">
+      <header className="evf-headline">
+        <p className="evf-eyebrow">everflow · the goal map</p>
+        <p className="evf-headline__sub">
+          Every box on this map is a goal with a definition of “done”. The dot says where it stands; the agent keeps
+          working the map on its own and only asks you what it can’t close itself.
+        </p>
+      </header>
+
       {line ? (
         <div className={`evf-ribbon evf-ribbon--${line.tone}`}>
           <div className="evf-ribbon__progress" aria-hidden="true">
