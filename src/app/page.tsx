@@ -10,7 +10,7 @@ export default function HomePage() {
   const memoryStore = env().store.mode === 'memory';
   return (
     <>
-      <header className="topbar">
+      <header className="topbar topbar--landing">
         <Link href="/" className="topbar__brand">
           <span className="topbar__mark">W</span>
           <span>Wireup</span>
@@ -58,14 +58,7 @@ export default function HomePage() {
               persistent storage.
             </div>
           ) : null}
-          <div className="landing__beacon" aria-hidden="true">
-            <span className="landing__beacon-orbit landing__beacon-orbit--outer" />
-            <span className="landing__beacon-orbit landing__beacon-orbit--inner" />
-            <div className="landing__beacon-core">
-              <img src="/logo.png" alt="Wireup" className="landing__beacon-logo" />
-            </div>
 
-          </div>
 
           <h1 className="landing__title">From "what if?" to wires on the bench.</h1>
           <p className="landing__subtitle">
