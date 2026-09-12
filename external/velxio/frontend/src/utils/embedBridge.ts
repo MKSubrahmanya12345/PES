@@ -21,7 +21,12 @@
  *   ── run control ────────────────────────────────────────────────────────
  *   parent → velxio   { type: 'velxio:run' | 'velxio:stop' | 'velxio:reset' }
  *     Drives the simulation the same way the toolbar buttons do. Each replies
- *     with { type: 'velxio:run-state', running }.
+ *     with { type: 'velxio:run-state', running }. `run` first compiles the
+ *     board when it has no program, or its sources changed since the last
+ *     build — an imported project arrives uncompiled, and starting a board
+ *     with no firmware would look like the push had been ignored. A build that
+ *     fails is answered with { type: 'velxio:run-error', message } and the
+ *     board is left stopped rather than running the previous program.
  *
  *   ── SERIAL — the real hardware⇄software link ───────────────────────────
  *   parent → velxio   { type: 'velxio:serial-subscribe' }
@@ -46,6 +51,8 @@
  * accounts, storage or the host machine.
  */
 import { buildVlxPayload, importVlxFile } from './vlxFile';
+import { compileBoardForFlash, isCompiledProgramStale } from './boardCompile';
+import { isPiBoardKind } from '../types/board';
 import { useSimulatorStore } from '../store/useSimulatorStore';
 
 interface BridgeMessage {
@@ -115,6 +122,40 @@ function postRunState(event: MessageEvent): void {
   reply(event, { type: 'velxio:run-state', running: useSimulatorStore.getState().running });
 }
 
+/**
+ * Start a board — compiling it first if there is nothing current to run.
+ *
+ * A project that just arrived over the bridge has no program: `compiledProgram`
+ * is written by Compile, and the import path deliberately does not build. So a
+ * bare `startSimulation()` here would spin up a board with no firmware, and the
+ * parent page would report "pushed onto the canvas" over a simulation that never
+ * runs the sketch it pushed. That is the difference between the circuit landing
+ * and the BUILD landing.
+ *
+ * The build goes through `compileBoardForFlash` — the same helper the flash
+ * dialog uses, so the file set, the per-board options and the staleness rule
+ * cannot drift from what the toolbar does. Boards that never compile
+ * (QEMU-Linux guests, MicroPython) start as they are, exactly like the toolbar's
+ * Run. A failed compile is answered with `velxio:run-error` and never papered
+ * over by starting a stale program.
+ */
+async function runBoard(event: MessageEvent): Promise<void> {
+  const sim = useSimulatorStore.getState();
+  const board = sim.boards.find((b) => b.id === sim.activeBoardId) ?? sim.boards[0];
+  // Boards that compile: everything except QEMU-Linux guests and MicroPython.
+  const compiles =
+    board !== undefined && board.languageMode !== 'micropython' && !isPiBoardKind(board.boardKind);
+  if (board && compiles && (!board.compiledProgram || isCompiledProgramStale(board))) {
+    const outcome = await compileBoardForFlash(board, () => undefined);
+    if (!outcome.ok) {
+      reply(event, { type: 'velxio:run-error', message: outcome.error });
+      return;
+    }
+  }
+  useSimulatorStore.getState().startSimulation();
+  postRunState(event);
+}
+
 export function initEmbedBridge(): void {
   if (window.parent === window) return; // not embedded — stay inert
 
@@ -150,10 +191,18 @@ export function initEmbedBridge(): void {
         return;
       }
 
-      case 'velxio:run':
-        useSimulatorStore.getState().startSimulation();
-        postRunState(event);
+      case 'velxio:run': {
+        // Fire-and-forget: compiling takes seconds and the message loop must
+        // not block on it. The outcome is answered either way — `velxio:run-state`
+        // once the board is running, `velxio:run-error` if the build failed.
+        void runBoard(event).catch((err: unknown) =>
+          reply(event, {
+            type: 'velxio:run-error',
+            message: err instanceof Error ? err.message : String(err),
+          }),
+        );
         return;
+      }
 
       case 'velxio:stop':
         useSimulatorStore.getState().stopSimulation();

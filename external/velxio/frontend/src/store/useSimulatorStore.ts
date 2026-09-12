@@ -1842,10 +1842,27 @@ export const useSimulatorStore = create<SimulatorState>((set, get) => {
 
       // Recreate boards with their saved ids so wire endpoints (which embed
       // the literal board id) keep matching.
+      //
+      // Board ⇄ file group: `addBoard` always binds a board to its own
+      // `group-<boardId>`, and `replaceFileGroups` (below) then replaces EVERY
+      // group with the ones this payload carries. A project whose sources were
+      // saved under a different group id would therefore end up pointing at a
+      // group that no longer exists — the canvas renders the circuit, the
+      // editor is empty, and Compile/Run builds nothing. So the payload's own
+      // `activeFileGroupId` wins whenever that group really holds files, and a
+      // board with no sources of either kind keeps the seed `addBoard` made (and
+      // gets it re-created after the replace, since the replace deletes it).
+      const groupForBoard = (b: BoardInstance): string => {
+        const saved = typeof b.activeFileGroupId === 'string' ? b.activeFileGroupId.trim() : '';
+        if (saved && (payload.fileGroups[saved]?.length ?? 0) > 0) return saved;
+        return `group-${b.id}`;
+      };
       payload.boards.forEach((b) => {
         addBoard(b.boardKind, b.x, b.y, b.id);
         // Apply the rest of the saved fields that addBoard doesn't set.
         const patch: Partial<BoardInstance> = {};
+        const groupId = groupForBoard(b);
+        if (groupId !== b.activeFileGroupId) patch.activeFileGroupId = groupId;
         if (b.languageMode && b.languageMode !== 'arduino') patch.languageMode = b.languageMode;
         if (b.name && b.name.trim()) patch.name = b.name;
         if (b.activeFileGroupId) patch.activeFileGroupId = b.activeFileGroupId;
@@ -1863,6 +1880,18 @@ export const useSimulatorStore = create<SimulatorState>((set, get) => {
       // Replace editor file groups atomically. Skip groups that already exist
       // (createFileGroup is a no-op for existing ids) — overwrite their files.
       useEditorStore.getState().replaceFileGroups(payload.fileGroups, payload.folderGroups);
+
+      // A board whose payload shipped no sources for it now points at a group
+      // that the replace deleted. Give it its normal seed sketch back, exactly
+      // as `addBoard` would have, so the editor and the compiler always have
+      // something to work with instead of an empty dangling group id.
+      for (const b of payload.boards) {
+        const groupId = groupForBoard(b);
+        if ((payload.fileGroups[groupId]?.length ?? 0) > 0) continue;
+        useEditorStore
+          .getState()
+          .createFileGroup(groupId, getBoardSeedFiles(b.boardKind, isPiBoardKind(b.boardKind) ? 'python' : 'arduino'));
+      }
 
       // Components and wires. Normalize the retired ssd1306-i2c / ssd1306-spi
       // ids (merged into the single auto-detecting `ssd1306`, issues #101/#215)

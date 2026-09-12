@@ -14,13 +14,26 @@
  *   wireup → velxio  { type: 'velxio:export-vlx' }             pull request
  *   velxio → wireup  { type: 'velxio:vlx-export', vlx }        canvas state
  *   wireup → velxio  { type: 'velxio:serial-subscribe' }       start streaming
+ *   wireup → velxio  { type: 'velxio:run' | 'velxio:stop' }    run control (run
+ *                                                    compiles first when the
+ *                                                    board has no current build)
  *   velxio → wireup  { type: 'velxio:serial-data', chunk }     UART output
  *   wireup → velxio  { type: 'velxio:serial-write', data }     UART input
  *   velxio → wireup  { type: 'velxio:vlx-error', message }     either failed
+ *   velxio → wireup  { type: 'velxio:run-state', running }     board started/stopped
+ *   velxio → wireup  { type: 'velxio:run-error', message }     the pushed build
+ *                                                    did not compile, so the
+ *                                                    board was left stopped
  *
- * The user therefore never imports the .vlx by hand: the build's circuit lands
- * on the canvas as soon as the iframe is ready, and canvas edits can be pulled
- * back without leaving the page.
+ * The user therefore never imports the .vlx by hand: the whole build — circuit
+ * and firmware — lands on the canvas as soon as the iframe is ready, and canvas
+ * edits can be pulled back without leaving the page.
+ *
+ * One caveat this side has to know about: a .vlx carries its sources in a
+ * `fileGroups` entry keyed by id, and the emulator only ever edits and compiles
+ * the group its BOARD points at (`board.activeFileGroupId`). The id is not
+ * arbitrary — see `velxioFileGroupId` in `modules/simulation`. Getting it wrong
+ * pushes a circuit with no code, and nothing on either side reports it.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -59,6 +72,17 @@ export interface VelxioBridge {
   status: BridgeStatus;
   /** Latest bytes the emulated board printed. */
   serialChunk: SerialChunk | null;
+  /**
+   * How many times a .vlx has been acknowledged on the canvas. A consumer that
+   * starts the board keys on this, not on the first push alone: a re-pushed
+   * sketch is a different program, and leaving the emulator running the old one
+   * would read as the update never having landed.
+   */
+  pushCount: number;
+  /** True while the emulated board is running (`velxio:run-state`). */
+  running: boolean;
+  /** Why the pushed build is not running, in Velxio's own words. */
+  runError: string | null;
   /** Push a .vlx (JSON string) onto the canvas. */
   push: (vlxJson: string) => void;
   /** Pull the current canvas. Rejects when the bridge does not answer. */
@@ -96,6 +120,9 @@ export function useVelxioBridge({
 }): VelxioBridge {
   const [status, setStatus] = useState<BridgeStatus>({ state: 'idle' });
   const [serialChunk, setSerialChunk] = useState<SerialChunk | null>(null);
+  const [pushCount, setPushCount] = useState(0);
+  const [running, setRunning] = useState(false);
+  const [runError, setRunError] = useState<string | null>(null);
 
   const frame = useRef<HTMLIFrameElement | null>(null);
   const pullWaiters = useRef<{ resolve: (payload: VlxCanvasPayload) => void; reject: (error: Error) => void }[]>([]);
@@ -203,6 +230,8 @@ export function useVelxioBridge({
     }
     setStatus({ state: 'waiting' });
     subscribed.current = false;
+    setRunning(false);
+    setRunError(null);
 
     const onMessage = (event: MessageEvent) => {
       if (!acceptableOrigins.includes(event.origin)) return;
@@ -211,6 +240,7 @@ export function useVelxioBridge({
         name?: string;
         message?: string;
         chunk?: string;
+        running?: boolean;
         vlx?: VlxCanvasPayload;
       };
       if (!message || typeof message.type !== 'string') return;
@@ -227,6 +257,23 @@ export function useVelxioBridge({
         }
         case 'velxio:vlx-loaded': {
           setStatus({ state: 'pushed', name: message.name ?? null });
+          // A new build on the canvas invalidates whatever the last one did.
+          setRunError(null);
+          setPushCount((count) => count + 1);
+          break;
+        }
+        case 'velxio:run-state': {
+          setRunning(Boolean(message.running));
+          break;
+        }
+        case 'velxio:run-error': {
+          // Deliberately NOT an error `status`: the canvas is fine and the
+          // board is loaded, only its program failed to build. Overwriting the
+          // status would also stop the next push from being posted (that effect
+          // fires off `ready`/`pushed`), turning one bad build into a dead
+          // bridge — the opposite of what the user needs to see.
+          setRunning(false);
+          setRunError(message.message ?? 'Velxio refused to start the board.');
           break;
         }
         case 'velxio:vlx-export': {
@@ -278,5 +325,21 @@ export function useVelxioBridge({
     frame.current = node;
   }, []);
 
-  return { status, serialChunk, push, pull, subscribeSerial, run, stop, serialWrite, setAssembly, applyArchetype, resetAssembly, frameRef };
+  return {
+    status,
+    serialChunk,
+    pushCount,
+    running,
+    runError,
+    push,
+    pull,
+    subscribeSerial,
+    run,
+    stop,
+    serialWrite,
+    setAssembly,
+    applyArchetype,
+    resetAssembly,
+    frameRef,
+  };
 }
