@@ -1,31 +1,39 @@
 /**
- * Source templates for the generated dashboard.
+ * Source templates for the generated website's FOUNDATION.
  *
  * Everything here is a pure `contract → file content` function. No file is
- * written from a fixed string that ignores the build: the metric cards, the
- * command buttons and the parser all come from the `DeviceContract`, which was
- * itself derived from the same plan the firmware was generated from.
+ * written from a fixed string that ignores the build: the parser, the link, the
+ * board hook and the contract module all come from the `DeviceContract`, which
+ * was itself derived from the same plan the firmware was generated from.
+ *
+ * The site's own structure — what is on the page, in what order, bound to what —
+ * is NOT here. That lives in `templates-skeleton.ts`, which emits a surface spec
+ * plus a block registry and a shell that renders whatever the spec says. This
+ * file supplies the parts that are genuinely fixed: the protocol parser, the
+ * transports, the one hook that owns board state, and the styles.
  *
  * The generated app is a plain Vite + React + TypeScript project with ZERO
  * runtime dependencies beyond react/react-dom. That is deliberate: the user
- * downloads a zip, runs `npm install && npm run dev`, and nothing in this
- * sandbox ever had to install, build or execute it.
+ * downloads a zip, runs `npm install && npm run dev` (or lets Wireup's terminal
+ * run it for them), and nothing in this sandbox ever had to install, build or
+ * execute it.
  *
  * ── How it reaches the board ────────────────────────────────────────────────
  * Two transports, both real, chosen at runtime:
  *
  *   1. `webserial` — the browser's Web Serial API talking to the USB port the
  *      board is actually plugged into. Chrome/Edge, https or localhost.
- *   2. `embed` — when the dashboard runs inside Wireup's /simulation page, the
+ *   2. `embed` — when the site runs inside Wireup's /simulation page, the
  *      parent relays the same byte stream to and from the Velxio emulator over
  *      postMessage. Same bytes, same protocol, emulated silicon instead of
  *      real silicon.
  *
  * There is no third "demo" transport that makes numbers up. If neither link is
- * available the dashboard says so and shows nothing.
+ * available the site says so and shows nothing.
  */
 
-import type { DeviceContract, DeviceMetric } from './contract';
+import type { DeviceContract } from './contract';
+import type { SurfaceSpec } from './skeleton';
 
 /** JSON-safe string literal for embedding in generated TS. */
 function lit(value: string): string {
@@ -691,177 +699,26 @@ export function useBoard() {
     clearLog: () => setLog([]),
   };
 }
-`;
-}
 
-export function appComponent(contract: DeviceContract): string {
-  return `/**
- * ${contract.projectName} — live dashboard.
- *
- * Every card below corresponds to a field this project's firmware prints, and
- * every button to a character its command parser accepts. When the board is
- * not connected the cards are empty — the dashboard never substitutes a
- * plausible-looking number for a reading it does not have.
+/**
+ * The shape every skeleton block receives as \`board\`. Exported so a block can
+ * be written without importing the hook's implementation — see
+ * src/skeleton/types.ts.
  */
-import { contract } from './contract';
-import { useBoard } from './useBoard';
-import './app.css';
-
-function formatValue(value: number | string | undefined, precision: number | undefined): string {
-  if (value === undefined) return '—';
-  if (typeof value === 'string') return value;
-  if (!Number.isFinite(value)) return '—';
-  return precision === undefined ? String(value) : value.toFixed(precision);
-}
-
-export default function App() {
-  const board = useBoard();
-  const connected = board.state.status === 'connected';
-
-  return (
-    <div className="app">
-      <header className="bar">
-        <div>
-          <h1>{contract.projectName}</h1>
-          <p className="sub">
-            {contract.controller} · {contract.transport}
-          </p>
-        </div>
-
-        <div className="link">
-          <span className={\`dot dot--\${board.state.status}\`} aria-hidden />
-          <span className="link__label">
-            {board.state.status === 'connected'
-              ? board.state.detail
-              : board.state.status === 'error'
-                ? board.state.message
-                : board.state.status === 'connecting'
-                  ? 'connecting…'
-                  : 'not connected'}
-          </span>
-
-          {!board.embedded && (
-            <button type="button" onClick={() => (connected ? void board.disconnect() : void board.connect())}>
-              {connected ? 'Disconnect' : 'Connect to the board'}
-            </button>
-          )}
-        </div>
-      </header>
-
-      {!board.embedded && !board.canUseWebSerial && (
-        <p className="notice">
-          This browser has no Web Serial API, so the dashboard cannot open the board's USB port. Use Chrome or
-          Edge, or open this dashboard inside Wireup's simulation page to drive the emulated board instead.
-        </p>
-      )}
-
-      {board.stale && connected && (
-        <p className="notice">
-          No telemetry frame for over {Math.round((contract.telemetryIntervalMs * 3) / 1000)} s — the board may
-          have stopped, reset, or lost its link. The values below are the last ones it sent.
-        </p>
-      )}
-
-      <main>
-        <section>
-          <h2>Readings</h2>
-          <div className="grid">
-${contract.metrics.map((metric) => metricCard(metric)).join('\n')}
-          </div>
-        </section>
-
-${contract.commands.length > 0 ? commandSection() : readOnlySection()}
-
-        <section>
-          <h2>
-            Board output
-            <button type="button" className="ghost" onClick={board.clearLog}>
-              clear
-            </button>
-          </h2>
-          <div className="log">
-            {board.log.length === 0 ? (
-              <p className="empty">Nothing received yet.</p>
-            ) : (
-              board.log.map((entry) => (
-                <div key={entry.id} className={\`log__line log__line--\${entry.line.kind}\`}>
-                  <span className="log__at">{entry.at}</span>
-                  <span className="log__text">{entry.line.raw}</span>
-                </div>
-              ))
-            )}
-          </div>
-        </section>
-      </main>
-
-      <footer>
-        <h2>What this dashboard is and is not</h2>
-        <ul>
-${contract.caveats.map((caveat) => `          <li>${escapeJsxText(caveat)}</li>`).join('\n')}
-        </ul>
-      </footer>
-    </div>
-  );
-}
+export type BoardApi = ReturnType<typeof useBoard>;
 `;
 }
 
-function metricCard(metric: DeviceMetric): string {
-  const range =
-    metric.min !== undefined && metric.max !== undefined
-      ? `              <span className="card__range">${metric.min}–${metric.max}${metric.unit ? ` ${escapeJsxText(metric.unit)}` : ''}</span>\n`
-      : '';
-  return `            <article className="card">
-              <h3>${escapeJsxText(metric.label)}</h3>
-              <p className="card__value">
-                {formatValue(board.telemetry[${lit(metric.field)}], ${metric.precision === undefined ? 'undefined' : metric.precision})}
-                ${metric.unit ? `<span className="card__unit">${escapeJsxText(metric.unit)}</span>` : ''}
-              </p>
-${range}              <p className="card__src">${escapeJsxText(metric.source)}</p>
-            </article>`;
-}
+/* -------------------------------------------------------------------------- */
+/* App.tsx and the skeleton                                                   */
+/* -------------------------------------------------------------------------- */
 
-function commandSection(): string {
-  return `        <section>
-          <h2>Controls</h2>
-          <p className="sub">
-            Each button writes one character to the board's link — the same byte you would type into a serial
-            monitor.
-          </p>
-          <div className="commands">
-            {contract.commands.map((command) => (
-              <button
-                key={command.character}
-                type="button"
-                disabled={!connected}
-                title={command.meaning}
-                onClick={() => void board.send(command.character)}
-              >
-                <span className="commands__char">{command.character}</span>
-                <span>{command.label}</span>
-              </button>
-            ))}
-          </div>
-          {!connected && <p className="empty">Connect to the board to enable the controls.</p>}
-        </section>
-`;
-}
-
-function readOnlySection(): string {
-  return `        <section>
-          <h2>Controls</h2>
-          <p className="empty">
-            This project's firmware defines no command set, so there is nothing to send. The dashboard is
-            read-only by design, not by omission.
-          </p>
-        </section>
-`;
-}
-
-/** JSX text is not HTML: only braces and angle brackets need escaping. */
-function escapeJsxText(value: string): string {
-  return value.replace(/[{}<>]/g, (char) => `{'${char}'}`);
-}
+/**
+ * The generated site's own components live in `templates-skeleton.ts`:
+ * `src/surface.ts` (the spec), `src/skeleton/*` (blocks, registry, shell) and
+ * the composition root `src/App.tsx`. They moved out of this file because they
+ * are no longer one dashboard template — they are a structure the user edits.
+ */
 
 export function mainTsx(): string {
   return `import { StrictMode } from 'react';
@@ -1010,7 +867,7 @@ footer li { margin-bottom: 4px; }
 `;
 }
 
-export function readme(contract: DeviceContract, slug: string): string {
+export function readme(contract: DeviceContract, slug: string, surface: SurfaceSpec): string {
   const metricRows = contract.metrics
     .map((metric) => `| \`${metric.field}\` | ${metric.label} | ${metric.unit || '—'} | ${metric.source} |`)
     .join('\n');
@@ -1021,7 +878,16 @@ export function readme(contract: DeviceContract, slug: string): string {
           .join('\n')
       : '| — | — | This firmware defines no command set. |';
 
-  return `# ${contract.projectName} — dashboard
+  const blockRows = surface.blocks
+    .map(
+      (block) =>
+        `| \`${block.id}\` | ${block.kind} | ${block.enabled ? 'on' : 'off'} | ${
+          block.fields.length > 0 ? block.fields.map((field) => `\`${field}\``).join(', ') : '—'
+        } | ${block.characters.length > 0 ? block.characters.map((char) => `\`${char}\``).join(' ') : '—'} |`,
+    )
+    .join('\n');
+
+  return `# ${contract.projectName} — generated website (a skeleton, not a fixed dashboard)
 
 Generated by Wireup from this project's pin plan and firmware. It is a plain
 Vite + React + TypeScript app with no runtime dependencies beyond React.
@@ -1032,6 +898,11 @@ Vite + React + TypeScript app with no runtime dependencies beyond React.
 npm install
 npm run dev      # http://localhost:5175
 \`\`\`
+
+Or let Wireup do it: open the project's **terminal** dock, pick the folder this
+zip was unzipped into, and it runs \`npm install\` then \`npm run dev\` for you and
+streams the output back into the page. It opens itself once the build's checks
+have all passed.
 
 \`\`\`bash
 npm run typecheck   # tsc --noEmit
@@ -1084,6 +955,28 @@ ${commandRows}
 
 ${contract.caveats.map((caveat) => `- ${caveat}`).join('\n')}
 
+## The skeleton
+
+The page is not a hardcoded dashboard. It is a spec plus a registry:
+
+* **\`src/surface.ts\`** — the spec. Which blocks exist, in what order, what each
+  one reads and sends, and the layout (\`${surface.layout}\` right now: one of
+  \`grid\`, \`stack\`, \`tabs\`, \`bare\`). **This is the file to edit.**
+* **\`src/skeleton/registry.tsx\`** — kind → component. Add your own renderer here
+  and the spec can name it.
+* **\`src/skeleton/Shell.tsx\`** — walks the spec and lays the blocks out. It
+  hardcodes no section of the page.
+* **\`src/skeleton/blocks/*.tsx\`** — one small component per kind. Each renders
+  what its spec entry binds and nothing else; a field the contract does not
+  declare shows up as an unbound card instead of a made-up value.
+
+| block id | kind | enabled | fields | sends |
+| -------- | ---- | ------- | ------ | ----- |
+${blockRows}
+
+A block whose kind is not registered renders as an empty slot that says so —
+never a crash, never a silent gap.
+
 ## Layout
 
 \`\`\`
@@ -1093,13 +986,20 @@ ${slug}/
 ├── tsconfig.json
 ├── vite.config.ts
 └── src/
-    ├── App.tsx        UI — cards and buttons, generated from the contract
+    ├── App.tsx               composition root — identity + <Shell/>
     ├── app.css
-    ├── contract.ts    the generated device contract (do not hand-edit)
-    ├── link.ts        Web Serial + embedded transports
+    ├── contract.ts           the generated device contract (do not hand-edit)
+    ├── link.ts               Web Serial + embedded transports
     ├── main.tsx
-    ├── protocol.ts    line parser + chunk reassembly
-    └── useBoard.ts    the one hook that owns the link and the state
+    ├── protocol.ts           line parser + chunk reassembly
+    ├── surface.ts            THE SKELETON SPEC — edit this
+    ├── useBoard.ts           the one hook that owns the link and the state
+    └── skeleton/
+        ├── Shell.tsx         renders the spec
+        ├── registry.tsx      kind → component
+        ├── format.ts         shared value formatter
+        ├── types.ts          BlockProps / BlockComponent
+        └── blocks/           metrics, commands, log, notes, status, slot
 \`\`\`
 `;
 }

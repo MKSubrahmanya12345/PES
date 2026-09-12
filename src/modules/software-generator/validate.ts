@@ -13,9 +13,11 @@
  *   3. every JSON file parses
  *   4. braces/parens/backticks balance in each TS/TSX file — the signature of
  *      a template-literal generator that dropped a brace
- *   5. the UI reads exactly the telemetry fields the contract declares, and
- *      sends exactly the characters it declares (contract drift)
- *   6. the contract's fields are ones the FIRMWARE actually prints
+ *   5. the contract module round-trips (the site imports it)
+ *   6. the SKELETON SPEC covers the contract: every telemetry field is bound to
+ *      a block that renders, every command character to one that sends it, and
+ *      a block kind the registry does not know is reported rather than hidden
+ *   7. the contract's fields are ones the FIRMWARE actually prints
  *
  * What it explicitly does NOT claim: type correctness, React hook rules, or
  * that `vite build` succeeds. `npm run typecheck` in the generated project is
@@ -26,6 +28,7 @@ import type { GeneratedCodeFile } from '@/types/project';
 
 import type { DeviceContract } from './contract';
 import { commandCharacters, opensControlLink } from './firmware-signals';
+import { isKnownKind, type SurfaceSpec } from './skeleton';
 
 export interface SoftwareFinding {
   severity: 'error' | 'warning' | 'info';
@@ -39,6 +42,8 @@ export interface SoftwareFinding {
 export interface ValidateInput {
   files: { path: string; content: string }[];
   contract: DeviceContract;
+  /** The skeleton spec the site renders from — `src/surface.ts` in the zip. */
+  surface: SurfaceSpec;
   firmware: Pick<GeneratedCodeFile, 'path' | 'content'>[];
 }
 
@@ -54,6 +59,7 @@ export function validateSoftwareProject(input: ValidateInput): SoftwareFinding[]
   checkJson(input.files, findings);
   checkBalance(input.files, findings);
   checkContractDrift(byPath, input.contract, findings);
+  checkSurface(input.files, input.surface, input.contract, findings);
   checkFirmwareAgreement(input.contract, input.firmware, findings);
 
   return findings;
@@ -413,7 +419,7 @@ function skipTemplate(source: string, start: number): number {
 }
 
 /* -------------------------------------------------------------------------- */
-/* 5. Contract drift between the contract and the UI                          */
+/* 5. The contract module round-trips                                         */
 /* -------------------------------------------------------------------------- */
 
 function checkContractDrift(
@@ -457,21 +463,158 @@ function checkContractDrift(
     });
   }
 
-  // Every metric must have a card reading its field.
-  for (const metric of contract.metrics) {
-    if (!app.includes(JSON.stringify(metric.field))) {
-      findings.push({
-        severity: 'error',
-        code: 'SW-METRIC-UNRENDERED',
-        message: `The firmware prints "${metric.field}" but src/App.tsx renders no card for it.`,
-        file: 'src/App.tsx',
-      });
-    }
+  // "Is this reading rendered?" is answered by checkSurface below: the site is a
+  // skeleton, so the binding lives in the spec (src/surface.ts), not in a
+  // section hardcoded into src/App.tsx. What App.tsx owes is the hand-off.
+  if (!/<Shell\s+board=\{board\}\s*\/>/.test(app)) {
+    findings.push({
+      severity: 'error',
+      code: 'SW-APP-NO-SHELL',
+      message:
+        'src/App.tsx does not hand the board to <Shell/>, so the skeleton spec in src/surface.ts would not be rendered at all.',
+      file: 'src/App.tsx',
+      suggestion: 'Keep App.tsx a composition root: own the link, render <Shell board={board} />.',
+    });
   }
 }
 
 /* -------------------------------------------------------------------------- */
-/* 6. The contract matches the firmware that was actually generated           */
+/* 6. The skeleton spec covers the contract                                   */
+/* -------------------------------------------------------------------------- */
+
+const SURFACE_PATH = 'src/surface.ts';
+
+/**
+ * The spec is the site's shape, so it is checked the way the contract is:
+ *
+ *   • it round-trips — `src/surface.ts` really ends with the literal the shell
+ *     imports, and that literal is valid JSON;
+ *   • every telemetry field is bound to an ENABLED block, otherwise the firmware
+ *     prints a reading nothing on the page shows (an error, not a style choice —
+ *     that is exactly how a card silently disappears);
+ *   • every command character is reachable from an enabled block (a warning:
+ *     dropping a control is a legitimate edit, but it should be a chosen one);
+ *   • a block kind the registry does not know is reported as info — it renders
+ *     as an honest empty slot, so it is a loose end, not a break;
+ *   • two blocks sharing an id would collide as React keys.
+ *
+ * What it does NOT do is insist on a dashboard: an empty spec, a `bare` layout
+ * and a page holding nothing but the board's raw output are all valid skeletons.
+ */
+function checkSurface(
+  files: { path: string; content: string }[],
+  surface: SurfaceSpec,
+  contract: DeviceContract,
+  findings: SoftwareFinding[],
+): void {
+  const source = files.find((file) => file.path === SURFACE_PATH)?.content;
+  if (!source) {
+    findings.push({
+      severity: 'error',
+      code: 'SW-SURFACE-MISSING',
+      message: `The project has no ${SURFACE_PATH}, but src/skeleton/Shell.tsx renders from it.`,
+      suggestion: 'Regenerate the project; the skeleton templates did not emit the spec.',
+    });
+    return;
+  }
+
+  const embedded = /export const surface: SurfaceSpec = ([\s\S]+);\n$/.exec(source);
+  if (!embedded) {
+    findings.push({
+      severity: 'error',
+      code: 'SW-SURFACE-UNREADABLE',
+      message: `${SURFACE_PATH} does not end with the expected \`export const surface\` assignment.`,
+      file: SURFACE_PATH,
+    });
+    return;
+  }
+
+  try {
+    const parsed = JSON.parse(embedded[1] as string) as SurfaceSpec;
+    if (parsed.blocks.length !== surface.blocks.length) {
+      findings.push({
+        severity: 'error',
+        code: 'SW-SURFACE-DRIFT',
+        message: `${SURFACE_PATH} does not carry the same block list the site was generated from.`,
+        file: SURFACE_PATH,
+      });
+    }
+  } catch (error) {
+    findings.push({
+      severity: 'error',
+      code: 'SW-SURFACE-INVALID',
+      message: `The spec embedded in ${SURFACE_PATH} is not valid JSON: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+      file: SURFACE_PATH,
+    });
+    return;
+  }
+
+  const enabled = surface.blocks.filter((block) => block.enabled);
+  const boundFields = new Set(enabled.flatMap((block) => block.fields));
+  // A metrics block with no `fields` means "everything in the contract".
+  const bindsEverything = enabled.some((block) => block.kind === 'metrics' && block.fields.length === 0);
+
+  for (const metric of contract.metrics) {
+    if (bindsEverything || boundFields.has(metric.field)) continue;
+    findings.push({
+      severity: 'error',
+      code: 'SW-METRIC-UNRENDERED',
+      message: `The firmware prints "${metric.field}" but no enabled block in ${SURFACE_PATH} binds it, so nothing on the page shows that reading.`,
+      file: SURFACE_PATH,
+      suggestion: `Add "${metric.field}" to a metrics block's \`fields\`, or enable the block that already has it.`,
+    });
+  }
+
+  const boundCharacters = new Set(enabled.flatMap((block) => block.characters));
+  const sendsEverything = enabled.some((block) => block.kind === 'commands' && block.characters.length === 0);
+  for (const command of contract.commands) {
+    if (sendsEverything || boundCharacters.has(command.character)) continue;
+    findings.push({
+      severity: 'warning',
+      code: 'SW-COMMAND-UNBOUND',
+      message: `The firmware accepts "${command.character}" (${command.label}) but no enabled block sends it, so that control is not on the page.`,
+      file: SURFACE_PATH,
+      suggestion: 'Correct if you meant to drop it; otherwise bind the character to a commands block.',
+    });
+  }
+
+  const seen = new Set<string>();
+  for (const block of surface.blocks) {
+    if (seen.has(block.id)) {
+      findings.push({
+        severity: 'error',
+        code: 'SW-BLOCK-DUPLICATE-ID',
+        message: `Two blocks in ${SURFACE_PATH} share the id "${block.id}", so the shell would render one React key twice.`,
+        file: SURFACE_PATH,
+      });
+    }
+    seen.add(block.id);
+
+    if (!isKnownKind(block.kind)) {
+      findings.push({
+        severity: 'info',
+        code: 'SW-BLOCK-CUSTOM-KIND',
+        message: `Block "${block.id}" uses kind "${block.kind}", which the generated registry does not know — it renders as an empty slot until a component is registered for it.`,
+        file: 'src/skeleton/registry.tsx',
+        suggestion: 'Add it to blockRegistry, or point the block at a kind that already exists.',
+      });
+    }
+  }
+
+  if (enabled.length === 0) {
+    findings.push({
+      severity: 'info',
+      code: 'SW-SURFACE-EMPTY',
+      message: `Every block in ${SURFACE_PATH} is disabled, so the site renders an empty shell. That is allowed; it is reported so it is not a surprise.`,
+      file: SURFACE_PATH,
+    });
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* 7. The contract matches the firmware that was actually generated           */
 /* -------------------------------------------------------------------------- */
 
 function checkFirmwareAgreement(

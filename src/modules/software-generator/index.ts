@@ -1,5 +1,5 @@
 /**
- * Software generator — the dashboard half of a build.
+ * Software generator — the website half of a build.
  *
  * Produces a complete Vite + React + TypeScript project as an in-memory file
  * list, statically validates it, and hands it to the API layer to be zipped.
@@ -18,6 +18,12 @@
  * A failed check is reported, never silently patched: the artifact ships with
  * its findings attached so the /simulation page can show exactly what is
  * suspect before the user unzips it.
+ *
+ * Installing and running the result is a separate, deliberate act that lives
+ * outside this module: `src/lib/terminal` spawns `npm install && npm run dev`
+ * in a folder the user picked, only after the checks below have passed, and
+ * streams the output back to the page. Generation stays pure; execution stays
+ * opt-in and observable.
  */
 
 import type { ComponentSelection } from '@/types/component';
@@ -28,9 +34,9 @@ import type { AgentEventLog } from '@/lib/logging/events';
 import { nowIso } from '@/lib/validation/time';
 
 import { deriveDeviceContract, type DeviceContract } from './contract';
+import { deriveSurface, type SurfaceSpec } from './skeleton';
 import { validateSoftwareProject, type SoftwareFinding } from './validate';
 import {
-  appComponent,
   appCss,
   contractModule,
   envDts,
@@ -45,6 +51,16 @@ import {
   useBoardHook,
   viteConfig,
 } from './templates';
+import {
+  appComponent,
+  registryModule,
+  shellModule,
+  skeletonBlockModules,
+  skeletonCss,
+  skeletonFormatModule,
+  skeletonTypesModule,
+  surfaceModule,
+} from './templates-skeleton';
 
 export interface SoftwareFile {
   path: string;
@@ -55,6 +71,12 @@ export interface SoftwareArtifact {
   /** URL/zip-safe project name. */
   slug: string;
   contract: DeviceContract;
+  /**
+   * The skeleton spec the site renders from — blocks, order, bindings, layout.
+   * Derived from the contract, shipped as `src/surface.ts`, and meant to be
+   * edited by the user. Nothing downstream may assume it describes a dashboard.
+   */
+  surface: SurfaceSpec;
   files: SoftwareFile[];
   findings: SoftwareFinding[];
   /** False when any finding is an error — the zip still downloads, flagged. */
@@ -78,6 +100,8 @@ export interface SoftwareGeneratorInput {
 }
 
 export const DASHBOARD_DEV_PORT = 5175;
+/** The generated site's dev port, named for what it is now. */
+export const WEBSITE_DEV_PORT = DASHBOARD_DEV_PORT;
 
 export function slugify(value: string): string {
   const slug = value
@@ -99,8 +123,43 @@ function firmwareHasCounter(firmware: Pick<GeneratedCodeFile, 'content'>[]): boo
   return firmware.some((file) => /\bpressCount\b/.test(file.content));
 }
 
+/**
+ * The generated project, as a file list.
+ *
+ * Exported on its own (rather than buried in `generateSoftware`) because two
+ * things need it: the pipeline, and the terminal dock's "write the site into
+ * the folder I picked" step — which materialises exactly these bytes and then
+ * runs `npm install && npm run dev` on them. One source of files, two ways to
+ * get them to the user.
+ */
+export function assembleSoftwareFiles(slug: string, contract: DeviceContract, surface: SurfaceSpec): SoftwareFile[] {
+  return [
+    { path: 'package.json', content: packageJson(slug) },
+    { path: 'tsconfig.json', content: tsconfigJson() },
+    { path: 'vite.config.ts', content: viteConfig() },
+    { path: 'index.html', content: indexHtml(contract.projectName) },
+    { path: '.gitignore', content: gitignore() },
+    { path: 'README.md', content: readme(contract, slug, surface) },
+    { path: 'src/vite-env.d.ts', content: envDts() },
+    { path: 'src/main.tsx', content: mainTsx() },
+    { path: 'src/App.tsx', content: appComponent(contract) },
+    // app.css carries the foundation styles plus the skeleton's block chrome.
+    { path: 'src/app.css', content: appCss() + skeletonCss() },
+    { path: 'src/contract.ts', content: contractModule(contract) },
+    { path: 'src/protocol.ts', content: protocolModule(contract) },
+    { path: 'src/link.ts', content: linkModule() },
+    { path: 'src/useBoard.ts', content: useBoardHook() },
+    { path: 'src/surface.ts', content: surfaceModule(surface) },
+    { path: 'src/skeleton/types.ts', content: skeletonTypesModule() },
+    { path: 'src/skeleton/format.ts', content: skeletonFormatModule() },
+    { path: 'src/skeleton/registry.tsx', content: registryModule() },
+    { path: 'src/skeleton/Shell.tsx', content: shellModule() },
+    ...skeletonBlockModules(),
+  ];
+}
+
 export function generateSoftware(input: SoftwareGeneratorInput): SoftwareArtifact {
-  const handle = input.events?.start('software_generation_started', 'Generating the dashboard website...', {
+  const handle = input.events?.start('software_generation_started', 'Generating the website skeleton...', {
     stage: 'software',
     metadata: { controller: input.controllerName },
   });
@@ -116,31 +175,21 @@ export function generateSoftware(input: SoftwareGeneratorInput): SoftwareArtifac
     firmware: input.firmware,
   });
 
-  const files: SoftwareFile[] = [
-    { path: 'package.json', content: packageJson(slug) },
-    { path: 'tsconfig.json', content: tsconfigJson() },
-    { path: 'vite.config.ts', content: viteConfig() },
-    { path: 'index.html', content: indexHtml(contract.projectName) },
-    { path: '.gitignore', content: gitignore() },
-    { path: 'README.md', content: readme(contract, slug) },
-    { path: 'src/vite-env.d.ts', content: envDts() },
-    { path: 'src/main.tsx', content: mainTsx() },
-    { path: 'src/App.tsx', content: appComponent(contract) },
-    { path: 'src/app.css', content: appCss() },
-    { path: 'src/contract.ts', content: contractModule(contract) },
-    { path: 'src/protocol.ts', content: protocolModule(contract) },
-    { path: 'src/link.ts', content: linkModule() },
-    { path: 'src/useBoard.ts', content: useBoardHook() },
-  ];
+  // The skeleton: what the page shows is data (the surface spec) resolved
+  // through a registry, so the site is a structure the user reshapes rather
+  // than one dashboard template with a variable number of cards.
+  const surface = deriveSurface(contract);
+  const files = assembleSoftwareFiles(slug, contract, surface);
 
-  const findings = validateSoftwareProject({ files, contract, firmware: input.firmware });
+  const findings = validateSoftwareProject({ files, contract, surface, firmware: input.firmware });
   const errors = findings.filter((finding) => finding.severity === 'error');
   const passed = errors.length === 0;
 
   const notes = [
     'Generated and statically validated only — no dependency was installed and no build was run.',
-    `Run \`npm install && npm run dev\` after unzipping; the dev server binds port ${DASHBOARD_DEV_PORT}.`,
-    'The dashboard talks to the board over Web Serial, or over the Wireup /simulation bridge when embedded.',
+    `Run \`npm install && npm run dev\` after unzipping — or pick the folder in Wireup's terminal dock and it runs both for you. The dev server binds port ${DASHBOARD_DEV_PORT}.`,
+    'The site is a skeleton: `src/surface.ts` decides which blocks render, in what order, in which layout. It is not a fixed dashboard.',
+    'It talks to the board over Web Serial, or over the Wireup /simulation bridge when embedded.',
   ];
   if (!passed) {
     notes.push(`${errors.length} static check(s) failed — see the findings before running the project.`);
@@ -149,6 +198,7 @@ export function generateSoftware(input: SoftwareGeneratorInput): SoftwareArtifac
   const artifact: SoftwareArtifact = {
     slug,
     contract,
+    surface,
     files,
     findings,
     passed,
@@ -158,10 +208,13 @@ export function generateSoftware(input: SoftwareGeneratorInput): SoftwareArtifac
   };
 
   handle?.complete(
-    `Dashboard generated — ${files.length} file(s), ${contract.metrics.length} reading(s), ${contract.commands.length} control(s)` +
+    `Website skeleton generated — ${files.length} file(s), ${surface.blocks.length} block(s) in a ${surface.layout} layout, ` +
+      `${contract.metrics.length} reading(s), ${contract.commands.length} control(s)` +
       (passed ? ', all static checks passed.' : `, ${errors.length} check(s) failed.`),
     {
       files: files.length,
+      blocks: surface.blocks.length,
+      layout: surface.layout,
       metrics: contract.metrics.length,
       commands: contract.commands.length,
       findings: findings.length,
@@ -173,4 +226,7 @@ export function generateSoftware(input: SoftwareGeneratorInput): SoftwareArtifac
 }
 
 export type { DeviceContract, DeviceMetric, DeviceCommand } from './contract';
+export type { SurfaceSpec, SurfaceBlock, SurfaceLayout } from './skeleton';
+export { KNOWN_BLOCK_KINDS, deriveSurface, enabledBlocks, isKnownKind } from './skeleton';
+export { validateSoftwareProject } from './validate';
 export type { SoftwareFinding } from './validate';
