@@ -55,9 +55,12 @@ interface TestResult {
   details?: string;
 }
 
-function runTest(name: string, fn: () => { status: 'pass' | 'fail' | 'skip'; message: string; details?: string }): TestResult {
+async function runTest(
+  name: string,
+  fn: () => Promise<{ status: 'pass' | 'fail' | 'skip'; message: string; details?: string }>,
+): Promise<TestResult> {
   try {
-    const result = fn();
+    const result = await fn();
     return { name, ...result };
   } catch (error) {
     return {
@@ -68,18 +71,25 @@ function runTest(name: string, fn: () => { status: 'pass' | 'fail' | 'skip'; mes
   }
 }
 
-function testHexCompiler(): TestResult {
-  return runTest('Hex Compiler', () => {
+async function testHexCompiler(): Promise<TestResult> {
+  return runTest('Hex Compiler', async () => {
     const files: GeneratedCodeFile[] = [
       { path: 'sketch.ino', content: TEST_SKETCH, language: 'cpp', purpose: 'main', generatedBy: 'planner' },
     ];
 
-    const result = compileToHex({
+    const result = await compileToHex({
       files,
       entryPoint: 'sketch.ino',
       controllerComponentId: 'arduino-uno',
     });
 
+    if (!result.ran) {
+      return {
+        status: 'skip',
+        message: 'Cross-compilation unavailable',
+        details: result.skippedReason,
+      };
+    }
     if (!result.ok) {
       return {
         status: 'fail',
@@ -96,13 +106,13 @@ function testHexCompiler(): TestResult {
   });
 }
 
-function testHarnessExecution(): TestResult {
-  return runTest('Headless AVR Harness', () => {
+async function testHarnessExecution(): Promise<TestResult> {
+  return runTest('Headless AVR Harness', async () => {
     const files: GeneratedCodeFile[] = [
       { path: 'sketch.ino', content: TEST_SKETCH, language: 'cpp', purpose: 'main', generatedBy: 'planner' },
     ];
 
-    const compileResult = compileToHex({
+    const compileResult = await compileToHex({
       files,
       entryPoint: 'sketch.ino',
       controllerComponentId: 'arduino-uno',
@@ -111,14 +121,15 @@ function testHarnessExecution(): TestResult {
     if (!compileResult.ok || !compileResult.hexContent) {
       return {
         status: 'skip',
-        message: 'Skipped (compilation failed)',
+        message: `Skipped (${compileResult.ran ? 'compilation failed' : 'compilation unavailable'})`,
+        details: compileResult.skippedReason,
       };
     }
 
     // Run simulation with button press at 100ms
     // Note: The harness currently doesn't fully support pin input driving
     // This test verifies the harness runs and produces output
-    const simResult = runSimulation({
+    const simResult = await runSimulation({
       hexContent: compileResult.hexContent,
       scenario: [],
       simulateMs: 500, // Longer simulation to allow counter to increment
@@ -146,8 +157,8 @@ function testHarnessExecution(): TestResult {
   });
 }
 
-function testSimValidator(): TestResult {
-  return runTest('Sim Validator Integration', () => {
+async function testSimValidator(): Promise<TestResult> {
+  return runTest('Sim Validator Integration', async () => {
     // Simple blink sketch for basic validation
     const blinkSketch = `
 const int ledPin = 13;
@@ -244,7 +255,7 @@ void loop() {
       behavioralSpec,
     };
 
-    const result = validateWithRealSim({
+    const result = await validateWithRealSim({
       requirements,
       code: { files, entryPoint: 'sketch.ino', pinsSynchronised: true, notes: [] },
       pinAssignments,
@@ -268,13 +279,13 @@ void loop() {
   });
 }
 
-function main(): void {
+async function main(): Promise<void> {
   console.log('=== Real Simulation Loop Verification ===\n');
 
   const tests = [
-    testHexCompiler(),
-    testHarnessExecution(),
-    testSimValidator(),
+    await testHexCompiler(),
+    await testHarnessExecution(),
+    await testSimValidator(),
   ];
 
   let passed = 0;
@@ -302,4 +313,4 @@ function main(): void {
   }
 }
 
-main();
+void main();

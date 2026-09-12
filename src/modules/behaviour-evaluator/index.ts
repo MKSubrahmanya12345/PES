@@ -11,6 +11,7 @@
  */
 
 export { deriveBehavioralSpec, mergeBehavioralSpecs, normalizeAssertionPayload } from './derive';
+export { compareBehavioral, describeExpected, parseArduinoPinNumber, telemetryFieldSeries } from './assertions';
 export { evaluateBehavioral } from './evaluate';
 export type { BehavioralEvaluationInput } from './evaluate';
 export { compileAndRunFirmware } from './emitter';

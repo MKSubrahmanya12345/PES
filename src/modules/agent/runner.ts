@@ -65,36 +65,43 @@ function computeCompletionStatus(
   const unfulfilledRequirements: string[] = [];
   const missingComponents: string[] = [];
 
+  /*
+   * Coverage matching also checks the selection's display NAME: catalog ids
+   * are slugs ("sensor-dht22") while requirements are prose ("temperature"),
+   * so id/role-only matching reported perfectly reasonable builds as
+   * unfulfilled.
+   */
+  const covers = (word: string): boolean => {
+    const needle = word.toLowerCase();
+    return selections.some(
+      (s) =>
+        s.componentId.toLowerCase().includes(needle) ||
+        s.name.toLowerCase().includes(needle) ||
+        s.role.toLowerCase().includes(needle),
+    );
+  };
+
   // Check if inputs are covered
   for (const input of requirements.inputs) {
-    const hasMatchingComponent = selections.some((s) =>
-      s.componentId.toLowerCase().includes(input.toLowerCase()) ||
-      s.role.toLowerCase().includes(input.toLowerCase()),
-    );
-    if (!hasMatchingComponent) {
+    if (!covers(input)) {
       unfulfilledRequirements.push(`input: ${input}`);
+      missingComponents.push(input);
     }
   }
 
   // Check if outputs are covered
   for (const output of requirements.outputs) {
-    const hasMatchingComponent = selections.some((s) =>
-      s.componentId.toLowerCase().includes(output.toLowerCase()) ||
-      s.role.toLowerCase().includes(output.toLowerCase()),
-    );
-    if (!hasMatchingComponent) {
+    if (!covers(output)) {
       unfulfilledRequirements.push(`output: ${output}`);
+      missingComponents.push(output);
     }
   }
 
   // Check features
   for (const feature of requirements.features) {
-    const hasMatchingComponent = selections.some((s) =>
-      s.componentId.toLowerCase().includes(feature.toLowerCase()) ||
-      s.role.toLowerCase().includes(feature.toLowerCase()),
-    );
-    if (!hasMatchingComponent) {
+    if (!covers(feature)) {
       unfulfilledRequirements.push(`feature: ${feature}`);
+      missingComponents.push(feature);
     }
   }
 
@@ -323,9 +330,20 @@ Please autonomously design, verify, wire, code, and finalize this hardware syste
   /* Autonomous Completion Strategy: Guarantees 100% Sound Execution & Offline  */
   /* -------------------------------------------------------------------------- */
 
-  // 1. Ensure Hardware Selection (completeness check, not just emptiness)
+  /*
+   * 1. Ensure Hardware Selection AND a hardware plan.
+   *
+   * The completeness check is not just emptiness — and it also covers the
+   * happy path: NONE of the ReAct tools populate `blackboard.hardwarePlan`,
+   * so a fully "complete" ReAct run used to reach the pipeline with a null
+   * plan. The pipeline then fell back to an empty one (controller: null, no
+   * power rails, no architecture), and route_wiring ran against an empty
+   * power budget. Deriving the plan deterministically keeps the artifact
+   * honest without touching the ReAct selections (only genuinely missing
+   * components get added below).
+   */
   const completionBefore = computeCompletionStatus(blackboard.selections, requirements);
-  if (!completionBefore.isComplete) {
+  if (!completionBefore.isComplete || !blackboard.hardwarePlan) {
     const hwHandle = events.start('hardware_plan_started', 'Agent selecting components and checking physical constraints...', {
       stage: 'hardware',
     });

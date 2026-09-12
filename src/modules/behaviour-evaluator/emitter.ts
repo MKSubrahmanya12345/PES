@@ -39,6 +39,30 @@ export interface RunFirmwareResult {
 
 const SHIM_DIR = resolve(process.cwd(), 'scripts', 'firmware-shim-runtime');
 
+/** Wall-clock caps: the virtual clock cannot bound a `while(true);` busy-wait. */
+const COMPILE_TIMEOUT_MS = 60_000;
+const RUN_TIMEOUT_MS = 30_000;
+
+/** First host C++ compiler available (same candidates as firmware-compiler). */
+function hostCompiler(): string | null {
+  for (const candidate of ['g++', 'clang++']) {
+    try {
+      execFileSync(candidate, ['--version'], { stdio: ['ignore', 'pipe', 'ignore'], timeout: 5_000 });
+      return candidate;
+    } catch {
+      /* try the next candidate */
+    }
+  }
+  return null;
+}
+
+/** The first non-empty stderr line — the part of a compiler error a human needs. */
+function firstMeaningfulLine(error: unknown): string {
+  const stderr = error instanceof Error && 'stderr' in error ? String((error as { stderr?: string }).stderr ?? '') : '';
+  const message = error instanceof Error ? error.message : String(error);
+  return (stderr || message).split('\n').find((line) => line.trim().length > 0) ?? message;
+}
+
 /** Headers that are materialised next to the sketch (so `#include "config.h"` resolves). */
 const HEADER_EXT = /\.(h|hpp)$/;
 /** Source files that are compiled to object code. */
@@ -68,6 +92,11 @@ export function compileAndRunFirmware(input: RunFirmwareOptions): RunFirmwareRes
   // non-C++ sketch (Micropython, CircuitPython) cannot run in this harness.
   if (!CPP_EXT.test(entry.path)) {
     return { trace: emptyTrace, error: `entry sketch ${entry.path} is not a C++ sketch` };
+  }
+
+  const compiler = hostCompiler();
+  if (!compiler) {
+    return { trace: emptyTrace, error: 'no host C++ compiler found on PATH (install g++ or clang++)' };
   }
 
   const workDir = join(tmpdir(), `wireup-sim-${Date.now()}-${Math.floor(Math.random() * 1e6)}`);
@@ -105,24 +134,33 @@ export function compileAndRunFirmware(input: RunFirmwareOptions): RunFirmwareRes
     const tracePath = join(workDir, 'trace.txt');
 
     // 4. Compile against the instrumented core.
+    // (-fpermissive is a g++ flag; clang++ rejects it as unknown.)
+    const permissive = compiler === 'g++' ? ['-fpermissive'] : [];
     const objectFiles: string[] = [];
     for (const source of compileSources) {
       const obj = `${source}.o`;
       objectFiles.push(obj);
-      execFileSync('g++', [
+      execFileSync(compiler, [
         '-std=gnu++17',
         '-w',
-        '-fpermissive',
+        ...permissive,
         '-I', workDir,
         '-I', SHIM_DIR,
         '-c', source,
         '-o', obj,
-      ], { maxBuffer: 8 * 1024 * 1024 });
+      ], { maxBuffer: 8 * 1024 * 1024, timeout: COMPILE_TIMEOUT_MS });
     }
     const binary = join(workDir, 'sketch.bin');
-    execFileSync('g++', ['-std=gnu++17', '-w', '-fpermissive', '-I', workDir, '-I', SHIM_DIR, ...objectFiles, `${SHIM_DIR}/core.cpp`, '-o', binary], { maxBuffer: 8 * 1024 * 1024 });
+    execFileSync(compiler, ['-std=gnu++17', '-w', ...permissive, '-I', workDir, '-I', SHIM_DIR, ...objectFiles, `${SHIM_DIR}/core.cpp`, '-o', binary], { maxBuffer: 8 * 1024 * 1024, timeout: COMPILE_TIMEOUT_MS });
 
-    // 5. Execute and read the trace.
+    /*
+     * 5. Execute and read the trace.
+     *
+     * The wall-clock timeout is not redundant with WIREUP_SIM_MS: the shim's
+     * virtual clock only advances through delay()/millis(), so a sketch with a
+     * bare `while (true) {}` busy-wait would spin on the host forever — and
+     * execFileSync without a timeout froze the whole server with it.
+     */
     execFileSync(binary, [], {
       env: {
         ...process.env,
@@ -131,13 +169,13 @@ export function compileAndRunFirmware(input: RunFirmwareOptions): RunFirmwareRes
         WIREUP_SIM_MS: String(input.simulateMs ?? 6000),
       },
       maxBuffer: 8 * 1024 * 1024,
+      timeout: RUN_TIMEOUT_MS,
     });
 
     const trace = parseTrace(readFileSync(tracePath, 'utf8'));
     return { trace };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return { trace: emptyTrace, error: `firmware could not be compiled or run: ${message.split('\n')[0]}` };
+    return { trace: emptyTrace, error: `firmware could not be compiled or run: ${firstMeaningfulLine(error)}` };
   } finally {
     try {
       rmSync(workDir, { recursive: true, force: true });

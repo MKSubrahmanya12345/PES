@@ -414,8 +414,6 @@ export async function runGeneration(projectId: string, options: RunOptions = {})
       logger.warn({ err: describeError(error).message, projectId }, 'everflow pass after finalisation failed (non-fatal)');
     }
 
-    await flusher.stop();
-    running.delete(projectId);
     logger.info(
       {
         projectId,
@@ -450,10 +448,22 @@ export async function runGeneration(projectId: string, options: RunOptions = {})
     logger.error({ err: error, projectId, stage }, 'generation failed');
 
     await persistFailure(projectId, failure);
-    await flusher.stop();
-    running.delete(projectId);
 
     return { ...project, status: 'failed', stage: 'failed', error: failure };
+  } finally {
+    /*
+     * Guaranteed teardown. A projectId left in `running` makes every later
+     * runGeneration() return the stale state without ever regenerating, and a
+     * flusher left attached keeps a timer alive for a finished run — so both
+     * are released here no matter how the run exited (success, failure, or an
+     * unexpected throw inside the finalisation itself).
+     */
+    try {
+      await flusher.stop();
+    } catch (error) {
+      logger.warn({ err: describeError(error).message, projectId }, 'event flusher stop failed');
+    }
+    running.delete(projectId);
   }
 }
 

@@ -345,7 +345,16 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineOutput>
   await stage({ pinAssignments: assignments }, 'pins');
   await stage({ wiring }, 'wiring');
   await stage({ softwarePlan }, 'software');
-  await stage({ artifacts }, 'instructions');
+  /*
+   * The agent builds code/libraries/diagram/instructions in one shot, but the
+   * documented waterfall (and the UI progress rail) has a stage per artifact —
+   * skipping straight to 'instructions' left 'code', 'libraries' and 'diagram'
+   * never emitted. Persist the artifacts once, then advance stage-only.
+   */
+  await stage({ artifacts }, 'code');
+  await stage({}, 'libraries');
+  await stage({}, 'diagram');
+  await stage({}, 'instructions');
 
   /* --- Done --------------------------------------------------------------- */
   state = {
