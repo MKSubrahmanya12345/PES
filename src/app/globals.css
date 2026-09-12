@@ -4037,9 +4037,10 @@ body {
 /* Final landing surface: keep the first page strictly black and white. */
 .landing {
   isolation: auto;
-  background: #ffffff;
+  background: #000000;
   background-image: none;
-  color: #111111;
+  color: #ffffff;
+  padding-top: clamp(54px, 8vh, 84px);
 }
 
 .landing::before,
@@ -4053,58 +4054,91 @@ body {
 .landing__subtitle,
 .landing__form-label,
 .landing__note {
-  color: #111111;
+  color: #ffffff;
 }
 
 .landing__subtitle {
-  color: #555555;
+  color: #b8b8b8;
 }
 
 .landing .prompt-form {
-  border: 1px solid #111111;
+  border: 1px solid #ffffff;
   border-radius: 0;
-  background: #ffffff;
-  box-shadow: 8px 8px 0 #111111;
+  background: #111111;
+  box-shadow: 8px 8px 0 #ffffff;
   backdrop-filter: none;
+}
+
+.topbar--landing {
+  background: #000000;
+  border-bottom-color: #333333;
+  color: #ffffff;
+}
+
+.topbar--landing .topbar__brand,
+.topbar--landing .topbar__meta {
+  color: #ffffff;
+}
+
+.topbar--landing .topbar__mark {
+  border-color: #ffffff;
+  color: #ffffff;
+}
+
+.topbar--landing .btn {
+  border-color: #ffffff;
+  background: #ffffff;
+  color: #000000;
+}
+
+.topbar--landing .btn:hover:not(:disabled) {
+  border-color: #cccccc;
+  background: #cccccc;
+  color: #000000;
+}
+
+.landing .prompt-form:focus-within {
+  border-color: #ffffff;
+  box-shadow: 8px 8px 0 #ffffff;
 }
 
 .landing .prompt-form__head,
 .landing .prompt-form__foot {
-  border-color: #111111;
-  background: #ffffff;
-  color: #555555;
+  border-color: #444444;
+  background: #111111;
+  color: #aaaaaa;
 }
 
 .landing .prompt-form__textarea {
-  background: #ffffff;
-  color: #111111;
-}
-
-.landing .prompt-form__textarea::placeholder {
-  color: #888888;
-}
-
-.landing .prompt-form__hint {
-  color: #555555;
-}
-
-.landing .btn--primary {
-  border-color: #111111;
   background: #111111;
   color: #ffffff;
 }
 
-.landing .example {
-  border-color: #cccccc;
-  border-radius: 0;
+.landing .prompt-form__textarea::placeholder {
+  color: #999999;
+}
+
+.landing .prompt-form__hint {
+  color: #aaaaaa;
+}
+
+.landing .btn--primary {
+  border-color: #ffffff;
   background: #ffffff;
-  color: #111111;
+  color: #000000;
+}
+
+.landing .example {
+  border-color: #444444;
+  border-radius: 0;
+  background: #000000;
+  color: #ffffff;
   backdrop-filter: none;
 }
 
 .landing .example:hover:not(:disabled) {
-  border-color: #111111;
-  background: #f5f5f5;
+  border-color: #ffffff;
+  background: #111111;
 }
 
 .drawer__count {

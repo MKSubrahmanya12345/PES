@@ -25,9 +25,9 @@ export default function HomePage() {
             alignItems: 'center',
             gap: 6,
             fontWeight: 600,
-            background: 'var(--bg-sunken)',
-            border: '1px solid var(--border-strong)',
-            color: 'var(--text)',
+            background: '#111111',
+            border: '1px solid #111111',
+            color: '#ffffff',
             padding: '4px 12px',
           }}
         >
