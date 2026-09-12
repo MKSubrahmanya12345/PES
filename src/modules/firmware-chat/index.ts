@@ -219,16 +219,26 @@ interface CompileOutcome {
   ran: boolean;
 }
 
-function compileProject(project: ProjectState): CompileOutcome {
-  const code = project.artifacts.code;
-  if (!code) return { ok: false, errors: ['no code artifact'], warnings: [], ran: false };
-  const result = compileFirmware({ files: code.files, entryPoint: code.entryPoint });
+function outcomeOf(result: ReturnType<typeof compileFirmware>): CompileOutcome {
+  const errors = result.diagnostics.filter((diagnostic) => diagnostic.severity === 'error').map(formatDiagnostic);
+  // The compiler rejected the sketch without a diagnostic we could attribute
+  // (timeout, shim failure): quote the honest reason instead of showing an
+  // empty error list under "it does not compile".
+  if (result.ran && !result.ok && errors.length === 0 && result.skippedReason) {
+    errors.push(result.skippedReason);
+  }
   return {
     ok: result.ok,
     ran: result.ran,
-    errors: result.diagnostics.filter((diagnostic) => diagnostic.severity === 'error').map(formatDiagnostic),
+    errors,
     warnings: result.diagnostics.filter((diagnostic) => diagnostic.severity === 'warning').map(formatDiagnostic),
   };
+}
+
+function compileProject(project: ProjectState): CompileOutcome {
+  const code = project.artifacts.code;
+  if (!code) return { ok: false, errors: ['no code artifact'], warnings: [], ran: false };
+  return outcomeOf(compileFirmware({ files: code.files, entryPoint: code.entryPoint }));
 }
 
 function freezeRevision(project: ProjectState, summary: string, outcome: CompileOutcome): ProjectState {
@@ -406,13 +416,7 @@ export async function runFirmwareChatTurn(input: {
 function compileSketchText(content: string, project: ProjectState): CompileOutcome {
   const code = project.artifacts.code;
   const files = [{ path: entryOf(project)?.path ?? 'sketch.ino', language: 'arduino', content, purpose: 'candidate', generatedBy: 'model' as const }];
-  const result = compileFirmware({ files, entryPoint: code?.entryPoint ?? 'sketch.ino' });
-  return {
-    ok: result.ok,
-    ran: result.ran,
-    errors: result.diagnostics.filter((diagnostic) => diagnostic.severity === 'error').map(formatDiagnostic),
-    warnings: result.diagnostics.filter((diagnostic) => diagnostic.severity === 'warning').map(formatDiagnostic),
-  };
+  return outcomeOf(compileFirmware({ files, entryPoint: code?.entryPoint ?? 'sketch.ino' }));
 }
 
 /* ------------------------------------------------------------------------- */

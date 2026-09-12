@@ -91,7 +91,7 @@ function compilableFiles(files: GeneratedCodeFile[], entryPoint: string): Genera
   const sources = files.filter((file) => /\.(ino|cpp|c|h|hpp)$/i.test(file.path));
   const entry = sources.find((file) => file.path === entryPoint);
   const rest = sources.filter((file) => file !== entry);
-  return entry ? [entry, ...rest] : rest;
+  return entry ? [entry, ...rest] : sources;
 }
 
 export function compileFirmware(input: { files: GeneratedCodeFile[]; entryPoint: string }): CompileResult {
@@ -133,11 +133,20 @@ export function compileFirmware(input: { files: GeneratedCodeFile[]; entryPoint:
       diagnostics.push(...parsed);
       return {
         ran: true,
-        ok: diagnostics.every((diagnostic) => diagnostic.severity !== 'error'),
+        /*
+         * The compiler exited non-zero (or timed out) — that is a failure even
+         * when no gcc-style diagnostic line survives the known-file filter
+         * (errors inside shim headers, an oversized sketch, a killed process).
+         * The previous `diagnostics.every(...)` scored an empty list as ok and
+         * silently turned a rejected build into a passed gate.
+         */
+        ok: false,
         compiler: status.compiler,
         durationMs: Date.now() - startedAt,
         diagnostics,
-        ...(diagnostics.length === 0 ? { skippedReason: `the compiler exited non-zero without diagnostics (sketch may be too large or the host is misbehaving)` } : {}),
+        ...(diagnostics.length === 0
+          ? { skippedReason: `the compiler exited non-zero without parseable diagnostics: ${(stderr || output || String(error)).split('\n').find((line) => line.trim()) ?? 'unknown error'}` }
+          : {}),
       };
     }
   } finally {

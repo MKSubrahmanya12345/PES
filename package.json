@@ -25,6 +25,7 @@
     "verify:firmware": "tsx scripts/compile-check.ts",
     "verify:behavioral": "tsx scripts/verify-behavioral.ts",
     "verify:real-sim": "tsx scripts/verify-real-sim.ts",
+    "verify:avr-harness": "tsx scripts/verify-avr-harness.ts",
     "verify:llm-codegen": "tsx scripts/verify-llm-codegen.ts",
     "verify:workbench": "tsx scripts/verify-firmware-workbench.ts",
     "verify:cad-link": "tsx scripts/verify-cad-link.ts",

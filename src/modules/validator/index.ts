@@ -27,6 +27,8 @@ import { groupIssuesByArtifact, runRuleEngine, summariseIssues } from './rules';
 import { issueSignature, runModelReview } from './llm';
 import { behavioralFindings, evaluateBehavioral } from '@/modules/behaviour-evaluator';
 import { compileFirmware, formatDiagnostic } from '@/modules/firmware-compiler';
+import { validateWithRealSim } from '@/modules/sim-validator';
+import { env } from '@/lib/validation/env';
 
 export const ENGINE_VERSION = 'wireup-validator/1.0';
 
@@ -155,6 +157,29 @@ export async function validateProject(input: ValidatorInput): Promise<ValidatePr
         compileIssueIds.push(issue.id);
       }
 
+      /*
+       * The compiler rejected the sketch but produced no diagnostic the gate
+       * could attribute to a project file (shim-header failure, timeout,
+       * oversized output). Surface that honestly instead of passing the check
+       * with an empty issue list — the fixer needs to know the build failed.
+       */
+      if (compile.ran && !compile.ok && compileIssueIds.length === 0) {
+        const issue: ValidationIssue = {
+          id: 'compile.unattributed',
+          code: 'firmware_compile_error',
+          severity: 'error',
+          domain: 'code',
+          message: 'The firmware failed the compile gate without a parseable diagnostic.',
+          details: compile.skippedReason ?? 'The compiler exited non-zero.',
+          fixHint: 'Inspect the sketch for constructs the host shim cannot type-check, or re-generate the firmware.',
+          target: { artifact: 'code', filePath: entry.path },
+          autoFixable: true,
+          origin: 'rules',
+        };
+        issues.push(issue);
+        compileIssueIds.push(issue.id);
+      }
+
       checks.push({
         id: 'code.compile',
         name: 'Firmware type-check (host shim)',
@@ -165,6 +190,78 @@ export async function validateProject(input: ValidatorInput): Promise<ValidatePr
           : `${compileIssueIds.length} error(s) in ${compile.durationMs} ms (${compile.compiler ?? 'host compiler'}).`,
         issueIds: compileIssueIds,
       });
+    }
+  }
+
+  /* --- 1d. Real simulation gate (arduino-cli → avr8js, opt-in) ------------- */
+  /*
+   * The third feedback source, fully separated from the two above: the sketch
+   * is CROSS-COMPILED to real AVR machine code and EXECUTED instruction by
+   * instruction; the runtime assertions of the behavioral spec are checked
+   * against the actual pin/serial trace. Failures become
+   * `sim_behavior_mismatch` issues, which the fixer loop consumes like any
+   * other structured feedback ("expected X, got Y" from a real execution).
+   *
+   * Gated by WIREUP_ENABLE_REAL_SIM_LOOP (default off) and AVR controllers
+   * only; when it cannot run, the check says exactly why and validation
+   * continues on the deterministic gates.
+   */
+  if (env().agent.enableRealSimLoop && project.requirements) {
+    const runtimeAssertions = (project.requirements.behavioralSpec?.assertions ?? []).filter(
+      (assertion) => assertion.subject.kind !== 'firmware',
+    );
+    const compileGateFailed = checks.some((check) => check.id === 'code.compile' && check.status === 'failed');
+
+    const skipRealSim = (reason: string): void => {
+      checks.push({
+        id: 'code.real_sim',
+        name: 'Real AVR simulation (arduino-cli + avr8js)',
+        domain: 'behavior',
+        status: 'skipped',
+        message: `Not run: ${reason}.`,
+        issueIds: [],
+      });
+      events?.emit('info', `Real simulation gate skipped — ${reason}.`, {
+        stage: 'validating',
+        metadata: { gate: 'real_sim', reason },
+      });
+    };
+
+    if (runtimeAssertions.length === 0) {
+      skipRealSim('the behavioral spec has no runtime assertions to execute against');
+    } else if (compileGateFailed) {
+      skipRealSim('the host compile gate already reported errors — fix them before spending a cross-compile');
+    } else {
+      const controller = project.components.find((selection) => selection.category === 'microcontroller');
+      const libraries = (project.artifacts.libraries?.libraries ?? project.softwarePlan?.libraries ?? []).map(
+        (library) => library.name,
+      );
+      const sim = await validateWithRealSim({
+        requirements: project.requirements,
+        code: project.artifacts.code,
+        pinAssignments: project.pinAssignments,
+        selections: project.components,
+        ...(controller ? { controllerComponentId: controller.componentId } : {}),
+        libraries,
+      });
+
+      issues.push(...sim.issues);
+      checks.push({
+        id: 'code.real_sim',
+        name: 'Real AVR simulation (arduino-cli + avr8js)',
+        domain: 'behavior',
+        status: !sim.ran ? 'skipped' : sim.passed ? 'passed' : 'failed',
+        message: !sim.ran
+          ? `Not run: ${sim.skippedReason ?? 'real simulation unavailable'}.`
+          : `${sim.report.checks.length} runtime assertion(s) executed against the emulated AVR in ${sim.report.durationMs} ms — ${sim.issues.length} mismatch(es).`,
+        issueIds: sim.issues.map((issue) => issue.id),
+      });
+      if (!sim.ran) {
+        events?.emit('info', `Real simulation gate skipped — ${sim.skippedReason ?? 'unavailable'}.`, {
+          stage: 'validating',
+          metadata: { gate: 'real_sim', reason: sim.skippedReason ?? 'unavailable' },
+        });
+      }
     }
   }
 
