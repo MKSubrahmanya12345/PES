@@ -33,6 +33,7 @@ export interface IntakeDoubtSeed {
   decider: ProjectDoubt['decider'];
   blocking: boolean;
   options: string[];
+  allowMultiple?: boolean;
   proposedDefault: string | null;
   confidence: number;
 }
@@ -47,12 +48,63 @@ function makeDoubt(seed: IntakeDoubtSeed, at: string): ProjectDoubt {
     decider: seed.decider,
     blocking: seed.blocking,
     options: seed.options,
+    ...(seed.allowMultiple ? { allowMultiple: true } : {}),
     proposedDefault: seed.proposedDefault,
     confidence: Math.min(1, Math.max(0, seed.confidence)),
     status: 'open',
     answer: null,
     createdAt: at,
   };
+}
+
+/**
+ * Resolve a natural-language multi-choice answer against this doubt's actual
+ * options. The intake UI historically accepted only one string, so answers
+ * such as "both" were persisted literally and downstream had to guess which
+ * option the user meant. Keep the original answer field, but also preserve the
+ * concrete choices whenever they can be identified unambiguously.
+ */
+export function selectedOptionsForDoubt(
+  doubt: Pick<ProjectDoubt, 'options'>,
+  value?: string,
+  selectedOptions?: string[],
+): string[] {
+  const available = doubt.options.filter((option) => option.trim().length > 0);
+  const allowed = new Set(available);
+  const explicit = (selectedOptions ?? []).filter((option) => allowed.has(option));
+  if (explicit.length > 0) return [...new Set(explicit)];
+
+  const text = value?.trim().toLowerCase() ?? '';
+  if (!text) return [];
+
+  // "both" is only expanded when there are exactly two concrete options.
+  // With three or four options it is ambiguous and must remain human prose.
+  const concrete = available.filter((option) => !/^you choose\b|^agent decides\b/i.test(option));
+  if (/^(both|both of them|both options)$/i.test(text) && concrete.length === 2) {
+    return concrete;
+  }
+
+  // Also understand a typed answer that repeats two option labels, e.g.
+  // "internal pull-up and external pull-up".
+  const matched = concrete.filter((option) => text.includes(option.toLowerCase()));
+  return matched.length > 1 ? matched : [];
+}
+
+/** Canonical context text for an answer, explicit enough for the planner. */
+export function answerValueForDoubt(
+  doubt: Pick<ProjectDoubt, 'options'>,
+  value?: string,
+  selectedOptions?: string[],
+): { value: string; selectedOptions?: string[] } {
+  const selected = selectedOptionsForDoubt(doubt, value, selectedOptions);
+  if (selected.length > 1) {
+    return {
+      value: `Selected options: ${selected.join(' + ')}`,
+      selectedOptions: selected,
+    };
+  }
+  if (selected.length === 1) return { value: selected[0] as string };
+  return { value: value?.trim() ?? '' };
 }
 
 /**
@@ -169,15 +221,24 @@ export function deriveDeterministicDoubts(prompt: string): ProjectDoubt[] {
     });
   }
 
-  seeds.push({
-    question: 'Who is this for, and where will it be used (desk, outdoors, indoors, kids, lab…)?',
-    consequence: 'Environment decides enclosures, battery life targets and which safety checks matter.',
-    decider: 'human',
-    blocking: false,
-    options: [],
-    proposedDefault: null,
-    confidence: 0.2,
-  });
+  // Do not ask a universal context question on every project. It is useful only
+  // when the brief leaves the physical setting and audience genuinely open;
+  // a prompt that already says "outdoors", "desk", "lab", etc. has answered it.
+  const contextAlreadySpecified =
+    /\b(outdoors?|indoors?|desk|lab|workshop|home|office|school|kids?|children|wearable|vehicle|garden|farm|factory|kitchen|garage|classroom)\b/i.test(
+      prompt,
+    );
+  if (!contextAlreadySpecified) {
+    seeds.push({
+      question: 'Who is this for, and where will it be used (desk, outdoors, indoors, kids, lab…)?',
+      consequence: 'Environment decides enclosures, battery life targets and which safety checks matter.',
+      decider: 'human',
+      blocking: false,
+      options: [],
+      proposedDefault: null,
+      confidence: 0.2,
+    });
+  }
 
   seeds.push({
     question: 'Anything you already own that the build should account for (parts, case, PSU, breadboard)?',
@@ -241,6 +302,7 @@ export function mergeIntakeDoubts(base: ProjectDoubt[], fromLlm: IntakeLlmPayloa
           decider,
           blocking: Boolean(seed.blocking),
           options: (seed.options ?? []).slice(0, 4).map((option) => String(option).slice(0, 80)),
+          ...(seed.allowMultiple ? { allowMultiple: true } : {}),
           proposedDefault: seed.proposedDefault ? String(seed.proposedDefault).slice(0, 80) : null,
           confidence: typeof seed.confidence === 'number' ? seed.confidence : 0.5,
         },
@@ -271,7 +333,10 @@ export function buildIntakeContext(doubts: ProjectDoubt[]): string | null {
   const lines: string[] = [];
   for (const doubt of doubts) {
     if (doubt.status === 'answered' && doubt.answer) {
-      lines.push(`Q: ${doubt.question}\nA (user): ${doubt.answer.value}`);
+      const answer = doubt.answer.selectedOptions?.length
+        ? `Selected options: ${doubt.answer.selectedOptions.join(' + ')}`
+        : doubt.answer.value;
+      lines.push(`Q: ${doubt.question}\nA (user): ${answer}`);
     } else if (doubt.status === 'assumed' || doubt.status === 'resolved_ai') {
       const value = doubt.answer?.value ?? doubt.proposedDefault ?? 'agent decides';
       lines.push(`Q: ${doubt.question}\nA (ASSUMPTION — user did not answer): ${value}`);

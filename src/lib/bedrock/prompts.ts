@@ -471,6 +471,7 @@ export const INTAKE_JSON_CONTRACT = `Return a single JSON object with EXACTLY th
       "blocking": true | false,
       "options": ["<up to 4 concrete options>"],
       "proposedDefault": "<your best default>",
+      "allowMultiple": true | false,
       "confidence": 0.0
     }
   ],
@@ -518,6 +519,8 @@ Your job:
      (controller, power source, the primary use case). At most 2 blocking.
    - Every doubt needs 2-4 concrete options (or [] for free-text context) and a
      proposedDefault, unless the user must supply lived context.
+   - Set allowMultiple true only when more than one listed option can safely
+     coexist in the same build; otherwise set it false.
 3. List up to 6 CLAIMS: facts stated in the prompt (quantities, features,
    environment), each one sentence.
 4. EXPAND the brief into the global project document. The user often dictates

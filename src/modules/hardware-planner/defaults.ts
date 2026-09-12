@@ -276,9 +276,45 @@ export function applyEngineeringDefaults(input: DefaultsInput): DefaultsResult {
     }, 0);
 
   /* 1. Controller ------------------------------------------------------------ */
+  const preferred = analysis.detectedPlatformComponentId;
+  const preferredDefinition = preferred ? definitionOf(preferred) : undefined;
   let controller = drafts.find((draft) => definitionOf(draft.componentId)?.category === 'microcontroller');
+
+  /*
+   * An explicit platform in the user's brief is a hard requirement, not a
+   * suggestion for the model to override. The old code accepted an exact but
+   * conflicting model choice (for example Arduino Uno) and only used the
+   * detected platform when no controller had been proposed. That is how an
+   * ESP32 brief could reach Velxio with an AVR board. Remove every conflicting
+   * model MCU and keep the exact catalog entry named by the brief.
+   */
+  if (preferredDefinition) {
+    const conflicting = drafts.filter(
+      (draft) => definitionOf(draft.componentId)?.category === 'microcontroller' && draft.componentId !== preferredDefinition.id,
+    );
+    for (let index = drafts.length - 1; index >= 0; index -= 1) {
+      if (definitionOf(drafts[index]!.componentId)?.category === 'microcontroller' && drafts[index]!.componentId !== preferredDefinition.id) {
+        drafts.splice(index, 1);
+      }
+    }
+    controller = drafts.find((draft) => draft.componentId === preferredDefinition.id);
+    if (!controller) {
+      drafts.unshift({
+        componentId: preferredDefinition.id,
+        quantity: 1,
+        role: 'controller',
+        reason: `Explicit platform in the brief: ${preferredDefinition.name}.`,
+        required: true,
+        source: 'catalog',
+      });
+      controller = drafts[0];
+    }
+    if (conflicting.length > 0) {
+      notes.push(`Replaced conflicting model controller selection(s) with the explicit catalog platform ${preferredDefinition.name}.`);
+    }
+  }
+
   if (!controller) {
-    const preferred = analysis.detectedPlatformComponentId;
     const needsRadio = features.has('bluetooth') || features.has('wifi') || features.has('ble');
     const chosen =
       (preferred && byId.has(preferred) ? preferred : undefined) ??

@@ -111,6 +111,41 @@ function PartMesh({
   // a part with no spec simply renders as geometry, exactly as before.
   const spec = useCadSpec(place.key);
   const groupRef = useRef<ThreeGroup>(null);
+  const isPushbutton = place.key === 'pushbutton' || place.key === 'pushbutton-6mm';
+  const pressedRef = useRef(false);
+
+  // The 3D bench is a second view of the mounted simulator, not a second
+  // button model. Feed the same DOM events that the 2D wokwi element and the
+  // existing simulation registries already consume. The window release
+  // listener matters when the pointer leaves the cap before it is released.
+  const releasePushbutton = useCallback(() => {
+    if (!isPushbutton || !pressedRef.current) return;
+    pressedRef.current = false;
+    document.getElementById(id)?.dispatchEvent(new Event('button-release'));
+  }, [id, isPushbutton]);
+
+  useEffect(() => {
+    if (!isPushbutton) return undefined;
+    const onPointerUp = () => releasePushbutton();
+    const onPointerCancel = () => releasePushbutton();
+    window.addEventListener('pointerup', onPointerUp);
+    window.addEventListener('pointercancel', onPointerCancel);
+    return () => {
+      window.removeEventListener('pointerup', onPointerUp);
+      window.removeEventListener('pointercancel', onPointerCancel);
+      releasePushbutton();
+    };
+  }, [isPushbutton, releasePushbutton]);
+
+  const pressPushbutton = useCallback(
+    (e: { stopPropagation: () => void }) => {
+      if (!isPushbutton || pressedRef.current) return;
+      e.stopPropagation();
+      pressedRef.current = true;
+      document.getElementById(id)?.dispatchEvent(new Event('button-press'));
+    },
+    [id, isPushbutton],
+  );
 
   return (
     <group
@@ -121,6 +156,9 @@ function PartMesh({
       position={[place.pos.x, place.pos.y, place.pos.z]}
       rotation={[0, place.rotY, 0]}
       scale={place.scale}
+      onPointerDown={isPushbutton ? pressPushbutton : undefined}
+      onPointerUp={isPushbutton ? releasePushbutton : undefined}
+      onPointerCancel={isPushbutton ? releasePushbutton : undefined}
       onDoubleClick={(e) => {
         if (!movable) return;
         e.stopPropagation();
@@ -145,18 +183,41 @@ function PartMesh({
   );
 }
 
-/** A wire as a physical tube between two resolved pin world positions. */
+/**
+ * A wire as a thin physical cable between two resolved pin world positions.
+ *
+ * The old renderer gave Catmull-Rom only two points, which is a straight line,
+ * then used a 1.1 mm radius — a 2.2 mm tube that looked like a rigid rod next
+ * to small through-hole pins. Real jumper wires have a little service loop,
+ * so give the curve two lifted control points and keep the insulation below a
+ * millimetre in diameter.
+ */
 function WireTube({ a, b, color }: { a: Vector3; b: Vector3; color: string }) {
   const geom = useMemo(() => {
-    if (a.distanceToSquared(b) < 1e-6) return null;
-    const curve = new CatmullRomCurve3([a.clone(), b.clone()], false, 'catmullrom', 0.5);
-    return new TubeGeometry(curve, 8, 1.1, 8, false);
+    const distance = a.distanceTo(b);
+    if (distance < 1e-6) return null;
+
+    const bendHeight = Math.max(4, Math.min(18, Math.hypot(b.x - a.x, b.z - a.z) * 0.12));
+    const liftedY = Math.max(a.y, b.y) + bendHeight;
+    const controlA = a.clone().lerp(b, 0.28);
+    const controlB = a.clone().lerp(b, 0.72);
+    controlA.y = liftedY;
+    controlB.y = liftedY;
+
+    const curve = new CatmullRomCurve3(
+      [a.clone(), controlA, controlB, b.clone()],
+      false,
+      'centripetal',
+      0.15,
+    );
+    const segments = Math.max(12, Math.min(40, Math.ceil(distance / 5)));
+    return new TubeGeometry(curve, segments, 0.35, 6, false);
   }, [a, b]);
 
   if (!geom) return null;
   return (
-    <mesh geometry={geom}>
-      <meshStandardMaterial color={color} roughness={0.4} metalness={0.3} />
+    <mesh geometry={geom} castShadow receiveShadow>
+      <meshStandardMaterial color={color} roughness={0.62} metalness={0.04} />
     </mesh>
   );
 }
