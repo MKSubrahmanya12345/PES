@@ -404,3 +404,335 @@ async def generate_code_files(
         "files": [{"name": f"{sketch_name}.ino", "content": sketch_content}],
         "board_fqbn": board_fqbn,
     }
+
+
+# ---------------------------------------------------------------------------
+# describe_assembly_archetypes
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def describe_assembly_archetypes() -> dict[str, Any]:
+    """
+    List the 3D mechanical assembly archetypes the simulator can auto-build.
+
+    An archetype is a preset chassis + wheel/prop geometry + kinematic model.
+    After picking one (with optional overrides via apply_assembly_archetype),
+    the simulator's live-ground agent will auto-lay the bench into that shape
+    and drive/balance/fly it from live motor signals.
+
+    Returns a dict keyed by archetype id, each entry describing the shape,
+    typical motors/wheels, kinematics, and the mount roles the chassis provides.
+    """
+    archetypes: dict[str, dict[str, Any]] = {
+        "2wd_rover": {
+            "label": "2WD smart car / differential-drive rover",
+            "shape": "horizontal_plate",
+            "motor_count": 2,
+            "extra_parts": ["1× caster wheel", "2× wheels (65mm)"],
+            "kinematics": "differential_drive",
+            "wheel_diameter_mm": 65,
+            "wheelbase_mm": 130,
+            "mount_roles": [
+                "motor_left", "motor_right", "wheel_left", "wheel_right",
+                "caster_front", "controller", "battery", "sensor_front",
+                "passenger",
+            ],
+        },
+        "4wd_rover": {
+            "label": "4WD / tank-drive rover",
+            "shape": "horizontal_plate",
+            "motor_count": 4,
+            "extra_parts": ["4× wheels (80mm)"],
+            "kinematics": "differential_drive",
+            "wheel_diameter_mm": 80,
+            "wheelbase_mm": 160,
+            "track_mm": 180,
+            "mount_roles": ["motor_fl", "motor_fr", "motor_rl", "motor_rr", "controller", "battery", "sensor_front"],
+        },
+        "self_balancer": {
+            "label": "Two-wheel self-balancing robot (inverted pendulum)",
+            "shape": "vertical_plate",
+            "motor_count": 2,
+            "extra_parts": ["2× wheels (85mm)", "MPU6050 IMU", "battery (mount low for CoM)"],
+            "kinematics": "inverted_pendulum",
+            "wheel_diameter_mm": 85,
+            "wheelbase_mm": 64,
+            "closed_loop_sensors": True,
+            "mount_roles": [
+                "motor_left", "motor_right", "wheel_left", "wheel_right",
+                "imu", "battery", "controller", "sensor_front",
+            ],
+            "note": "Wheels stay on the axle; chassis tilts with simulated balance physics. "
+                    "IMU should be mounted high, battery low.",
+        },
+        "quadcopter": {
+            "label": "Quadcopter X-frame drone",
+            "shape": "frame",
+            "motor_count": 4,
+            "extra_parts": ["4× propellers (127mm)", "IMU", "battery", "flight controller"],
+            "kinematics": "quadcopter",
+            "wheel_diameter_mm": 127,  # prop diameter
+            "wheelbase_mm": 226,
+            "closed_loop_sensors": True,
+            "mount_roles": ["motor_1", "motor_2", "motor_3", "motor_4", "controller", "battery", "imu"],
+        },
+        "mecanum": {
+            "label": "Mecanum omnidirectional base",
+            "shape": "horizontal_plate",
+            "motor_count": 4,
+            "extra_parts": ["4× mecanum wheels (100mm)"],
+            "kinematics": "mecanum",
+            "wheel_diameter_mm": 100,
+            "wheelbase_mm": 180,
+            "track_mm": 240,
+            "mount_roles": ["motor_fl", "motor_fr", "motor_rl", "motor_rr", "controller", "battery"],
+        },
+        "static": {
+            "label": "Static bench (no motion)",
+            "shape": None,
+            "motor_count": 0,
+            "kinematics": "static",
+            "note": "Parts stay wherever they are placed; no assembly or driving.",
+        },
+    }
+    return {
+        "archetypes": archetypes,
+        "how_to_apply": "Call apply_assembly_archetype(archetype_id, overrides?) to push a spec to the simulator. "
+                        "You can also call set_assembly_spec with a fully custom AssemblySpec if none of the "
+                        "presets match (e.g. a robotic arm, hexapod, custom chassis shape).",
+    }
+
+
+# ---------------------------------------------------------------------------
+# apply_assembly_archetype
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def apply_assembly_archetype(
+    archetype_id: Annotated[
+        str,
+        "Archetype id from describe_assembly_archetypes (e.g. 'self_balancer', '2wd_rover', 'quadcopter').",
+    ],
+    overrides: Annotated[
+        dict[str, Any] | None,
+        "Optional partial AssemblySpec to deep-merge over the preset (e.g. bindings, wheel size, origin).",
+    ] = None,
+) -> dict[str, Any]:
+    """
+    Build an AssemblySpec from a named archetype, with optional overrides, and
+    return the spec JSON. The Wireup/host side must post this to the embedded
+    Velxio iframe as `{ type: 'wireup:apply_archetype', archetype, overrides }`
+    to actually lay the bench out — the MCP server cannot reach the browser
+    directly. For convenience this tool also returns the ready-to-post message.
+
+    Use this after you have placed the board + motors + wheels + sensors on the
+    diagram but BEFORE running the firmware, so the scene assembles into the
+    requested shape as soon as the live view mounts.
+    """
+    known = {
+        "2wd_rover", "smart_car", "car", "4wd_rover", "tank",
+        "self_balancer", "balancer", "segway", "quadcopter", "drone",
+        "mecanum", "static", "bench",
+    }
+    if archetype_id not in known:
+        return {
+            "ok": False,
+            "error": f"Unknown archetype '{archetype_id}'. "
+                     f"Known ids: {sorted(known)}",
+        }
+
+    spec = _archetype_spec(archetype_id)
+    if overrides:
+        spec = _deep_merge(spec, overrides)
+
+    return {
+        "ok": True,
+        "archetype_id": archetype_id,
+        "spec": spec,
+        "post_to_iframe": {
+            "type": "wireup:apply_archetype",
+            "archetype": archetype_id,
+            "overrides": overrides or {},
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
+# set_assembly_spec
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def set_assembly_spec(
+    spec: Annotated[
+        dict[str, Any],
+        "A full AssemblySpec object (see "
+        "external/velxio/frontend/src/scene3d/assembly/assemblyTypes.ts).",
+    ],
+) -> dict[str, Any]:
+    """
+    Validate and echo a fully custom AssemblySpec, returning the ready-to-post
+    message to send to the Velxio iframe. Use this for archetypes not in the
+    preset list (robotic arm, hexapod, custom chassis shape, boxed robot, …).
+
+    Required top-level keys vary by model; the validator ensures at minimum
+    that a kinematics model is declared.
+    """
+    if not isinstance(spec, dict):
+        return {"ok": False, "error": "spec must be a JSON object."}
+    kin = spec.get("kinematics")
+    if not kin or not isinstance(kin, dict) or not kin.get("model"):
+        return {"ok": False, "error": "spec.kinematics.model is required (e.g. 'differential_drive', 'inverted_pendulum', 'quadcopter', 'mecanum', 'static')."}
+    return {
+        "ok": True,
+        "spec": spec,
+        "post_to_iframe": {"type": "wireup:set_assembly", "spec": spec},
+    }
+
+
+# ---------------------------------------------------------------------------
+# helpers
+# ---------------------------------------------------------------------------
+
+
+def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    import copy
+    out = copy.deepcopy(base)
+    for k, v in override.items():
+        if isinstance(v, dict) and isinstance(out.get(k), dict):
+            out[k] = _deep_merge(out[k], v)
+        else:
+            out[k] = copy.deepcopy(v)
+    return out
+
+
+def _archetype_spec(arch: str) -> dict[str, Any]:
+    # Mirrors frontend/src/scene3d/assembly/archetypes.ts (kept in sync by hand
+    # so the MCP tool can answer without booting the Vite frontend).
+    WHEEL = {"diameterMm": 65, "widthMm": 26, "tireColor": "#1a1a1a", "color": "#b5b5b5"}
+    if arch in ("2wd_rover", "smart_car", "car"):
+        return {
+            "archetype": "2wd_rover",
+            "chassis": {
+                "shape": "horizontal_plate",
+                "size": {"x": 250, "y": 2, "z": 150},
+                "thickness": 2,
+                "color": "#2b6cff",
+                "label": "2WD acrylic rover deck",
+                "mounts": [
+                    {"role": "motor_left",  "at": {"x": -70, "y": 16, "z":  65}, "rotY": 90},
+                    {"role": "motor_right", "at": {"x": -70, "y": 16, "z": -65}, "rotY": 90},
+                    {"role": "wheel_left",  "at": {"x": -70, "y": 16, "z":  82}},
+                    {"role": "wheel_right", "at": {"x": -70, "y": 16, "z": -82}},
+                    {"role": "caster_front","at": {"x": 110, "y": 13, "z": 0}},
+                    {"role": "controller",  "at": {"x": -30, "y": 4, "z": 0}},
+                    {"role": "battery",     "at": {"x":  60, "y": 4, "z": 0}},
+                    {"role": "sensor_front","at": {"x": 120, "y": 18, "z": 0}},
+                    {"role": "passenger",   "at": {"x": -60, "y": 25, "z": 0}},
+                ],
+            },
+            "wheel": WHEEL,
+            "kinematics": {"model": "differential_drive", "wheelbaseMm": 130, "deadbandRps": 0.05},
+            "origin": {"x": -100, "y": 5, "z": 300},
+            "rotYDeg": 0,
+        }
+    if arch in ("self_balancer", "balancer", "segway"):
+        return {
+            "archetype": "self_balancer",
+            "chassis": {
+                "shape": "vertical_plate",
+                "size": {"x": 80, "y": 200, "z": 2},
+                "thickness": 2,
+                "color": "#ff6f00",
+                "label": "Self-balancing 2-wheel chassis",
+                "mounts": [
+                    {"role": "motor_left",  "at": {"x": -10, "y": 10, "z": -12}},
+                    {"role": "motor_right", "at": {"x": -10, "y": 10, "z":  12}},
+                    {"role": "wheel_left",  "at": {"x": -10, "y": 10, "z": -32}, "rotY": 90},
+                    {"role": "wheel_right", "at": {"x": -10, "y": 10, "z":  32}, "rotY": 90},
+                    {"role": "imu",         "at": {"x": 0,   "y": 150, "z": 6}},
+                    {"role": "battery",     "at": {"x": 10,  "y": 30,  "z": -6}},
+                    {"role": "controller",  "at": {"x": -5,  "y": 90,  "z": 6}},
+                    {"role": "sensor_front","at": {"x": 40,  "y": 90,  "z": 0}},
+                ],
+            },
+            "wheel": {"diameterMm": 85, "widthMm": 20, "tireColor": "#1a1a1a"},
+            "kinematics": {
+                "model": "inverted_pendulum", "wheelbaseMm": 64, "deadbandRps": 0.02,
+                "gravity": 9810, "balancePointDeg": 0, "maxTiltDeg": 45,
+                "closedLoopSensors": True,
+            },
+            "sensors": [{"role": "imu"}, {"role": "encoder_left"}, {"role": "encoder_right"}],
+            "origin": {"x": 0, "y": 0, "z": 300},
+            "rotYDeg": 0,
+        }
+    if arch in ("quadcopter", "drone"):
+        return {
+            "archetype": "quadcopter",
+            "chassis": {
+                "shape": "frame",
+                "size": {"x": 250, "y": 20, "z": 250},
+                "thickness": 4, "color": "#222222",
+                "label": "Quadcopter X-frame",
+                "mounts": [
+                    {"role": "motor_1", "at": {"x":  80, "y": 14, "z":  80}},
+                    {"role": "motor_2", "at": {"x":  80, "y": 14, "z": -80}},
+                    {"role": "motor_3", "at": {"x": -80, "y": 14, "z": -80}},
+                    {"role": "motor_4", "at": {"x": -80, "y": 14, "z":  80}},
+                    {"role": "controller", "at": {"x": 0, "y": 6, "z": 0}},
+                    {"role": "battery", "at": {"x": -20, "y": 2, "z": 0}},
+                    {"role": "imu", "at": {"x": 0, "y": 10, "z": 0}},
+                ],
+            },
+            "wheel": {"diameterMm": 127, "widthMm": 8, "tireColor": "#1a1a1a", "color": "#555555"},
+            "kinematics": {
+                "model": "quadcopter", "wheelbaseMm": 226, "deadbandRps": 0.5,
+                "gravity": 9810, "liftK": 0.003, "massKg": 0.8, "closedLoopSensors": True,
+            },
+            "sensors": [{"role": "imu"}],
+            "origin": {"x": 0, "y": 80, "z": 300},
+            "rotYDeg": 0,
+        }
+    if arch in ("4wd_rover", "tank"):
+        return {
+            "archetype": "4wd_rover",
+            "chassis": {
+                "shape": "horizontal_plate", "size": {"x": 260, "y": 3, "z": 180},
+                "thickness": 3, "color": "#2e7d32", "label": "4WD off-road chassis",
+                "mounts": [
+                    {"role": "motor_fl", "at": {"x":  90, "y": 18, "z":  80}, "rotY": 90},
+                    {"role": "motor_fr", "at": {"x":  90, "y": 18, "z": -80}, "rotY": 90},
+                    {"role": "motor_rl", "at": {"x": -90, "y": 18, "z":  80}, "rotY": 90},
+                    {"role": "motor_rr", "at": {"x": -90, "y": 18, "z": -80}, "rotY": 90},
+                    {"role": "controller", "at": {"x": 0, "y": 4, "z": 0}},
+                    {"role": "battery", "at": {"x": -50, "y": 4, "z": 0}},
+                    {"role": "sensor_front", "at": {"x": 125, "y": 22, "z": 0}},
+                ],
+            },
+            "wheel": {"diameterMm": 80, "widthMm": 30, "tireColor": "#1a1a1a"},
+            "kinematics": {"model": "differential_drive", "wheelbaseMm": 160, "trackMm": 180, "deadbandRps": 0.05},
+            "origin": {"x": -100, "y": 5, "z": 300},
+        }
+    if arch == "mecanum":
+        return {
+            "archetype": "mecanum",
+            "chassis": {
+                "shape": "horizontal_plate", "size": {"x": 300, "y": 3, "z": 200},
+                "thickness": 3, "color": "#455a64", "label": "Mecanum omnidirectional base",
+                "mounts": [
+                    {"role": "motor_fl", "at": {"x":  120, "y": 20, "z":  90}, "rotY": 90},
+                    {"role": "motor_fr", "at": {"x":  120, "y": 20, "z": -90}, "rotY": 90},
+                    {"role": "motor_rl", "at": {"x": -120, "y": 20, "z":  90}, "rotY": 90},
+                    {"role": "motor_rr", "at": {"x": -120, "y": 20, "z": -90}, "rotY": 90},
+                    {"role": "controller", "at": {"x": 0, "y": 4, "z": 0}},
+                    {"role": "battery", "at": {"x": -60, "y": 4, "z": 0}},
+                ],
+            },
+            "wheel": {"diameterMm": 100, "widthMm": 36, "tireColor": "#333333"},
+            "kinematics": {"model": "mecanum", "wheelbaseMm": 180, "trackMm": 240, "deadbandRps": 0.05},
+            "origin": {"x": -100, "y": 5, "z": 300},
+        }
+    # static / bench
+    return {"archetype": "static_bench", "kinematics": {"model": "static"}}

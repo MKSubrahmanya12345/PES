@@ -605,13 +605,26 @@ export function LivePartSurfaces({ componentId, catalogKey, model, spec, root, b
           // while the readout still reports the true rpm. Without this every
           // fast part looks stationary (or worse, backwards).
           const visibleRate = Math.sign(rate) * Math.min(Math.abs(rate), DISPLAY_MAX_TURNS_PER_SECOND);
-          motion.spinAngle = (motion.spinAngle ?? motion.baseRotation[0]) + visibleRate * Math.PI * 2 * deltaSeconds;
+          // Seed the integrator from the BASE ROTATION on the ACTUAL spin axis
+          // (not always [0]). Previously a shaft authored with rotation:[90,0,0]
+          // (e.g. DC motor output_shafts pointing along Z) was seeded with π/2
+          // on X while spinning on Y/Z, so the first frame kicked the shaft
+          // into a permanent tilt and spin looked "stuck/flopping" rather than
+          // turning about its own axis.
+          const axisKey = axis === 'x' ? 'x' : axis === 'y' ? 'y' : 'z';
+          const axisIndex = axis === 'x' ? 0 : axis === 'y' ? 1 : 2;
+          if (motion.spinAngle === undefined) {
+            motion.spinAngle = motion.baseRotation[axisIndex];
+          }
+          motion.spinAngle += visibleRate * Math.PI * 2 * deltaSeconds;
+          // Restore the base orientation on all axes, then add the
+          // integrated spin only on the actual rotation axis.
           target.rotation.set(
             motion.baseRotation[0],
             motion.baseRotation[1],
             motion.baseRotation[2],
           );
-          target.rotation[axis === 'x' ? 'x' : axis === 'y' ? 'y' : 'z'] += motion.spinAngle;
+          target.rotation[axisKey] = motion.spinAngle;
           continue;
         }
 

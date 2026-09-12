@@ -231,6 +231,83 @@ function createFeatureAssembly(feature: CadFeature): THREE.Group {
       fin.position.set(width >= depth ? fraction * width * 0.84 : 0, height * 0.39, width >= depth ? 0 : fraction * depth * 0.84);
       assembly.add(fin);
     }
+  } else if (feature.type === 'wheel' || feature.type === 'wheel_tire' || feature.type === 'wheel_hub') {
+    // A wheel is a flat disc about the cylinder axis. dims = [diameter, thickness, 0].
+    // rotation [rx, ry, rz] is applied after creation so a wheel can face X (side
+    // of a chassis) or Z (under a motor pointing along Z) etc.
+    const diameter = Math.max(width, depth, 6);
+    const thickness = Math.max(height, 1);
+    const isHub = feature.type === 'wheel_hub';
+    const tireMat = isHub
+      ? new THREE.MeshStandardMaterial({ color: '#c0c8d0', roughness: 0.35, metalness: 0.7 })
+      : new THREE.MeshStandardMaterial({ color: '#1a1d22', roughness: 0.92, metalness: 0.05 });
+    const tire = new THREE.Mesh(
+      new THREE.CylinderGeometry(diameter / 2, diameter / 2, thickness, 40, 1, false),
+      tireMat,
+    );
+    assembly.add(tire);
+    if (!isHub) {
+      // Tread pattern: raised rubber blocks around the edge.
+      const treadCount = 18;
+      const treadMat = new THREE.MeshStandardMaterial({ color: '#0a0c0f', roughness: 1 });
+      for (let i = 0; i < treadCount; i += 1) {
+        const ang = (i / treadCount) * Math.PI * 2;
+        const block = new THREE.Mesh(
+          new THREE.BoxGeometry(thickness * 1.05, diameter * 0.045, diameter * 0.09),
+          treadMat,
+        );
+        block.position.set(Math.sin(ang) * (diameter / 2 - diameter * 0.022), 0, Math.cos(ang) * (diameter / 2 - diameter * 0.022));
+        block.rotation.y = ang;
+        assembly.add(block);
+      }
+      // Sidewall lip (a little wider ring on each face for depth).
+      const lipMat = new THREE.MeshStandardMaterial({ color: '#25282e', roughness: 0.85 });
+      for (const side of [+1, -1]) {
+        const lip = new THREE.Mesh(
+          new THREE.TorusGeometry(diameter / 2 - thickness * 0.4, thickness * 0.18, 8, 40),
+          lipMat,
+        );
+        lip.rotation.x = Math.PI / 2;
+        lip.position.y = side * thickness * 0.5;
+        assembly.add(lip);
+      }
+    }
+    // Hub cap (silver center + lug nuts).
+    if (feature.type !== 'wheel_tire') {
+      const hubDiameter = diameter * 0.32;
+      const hubCap = new THREE.Mesh(
+        new THREE.CylinderGeometry(hubDiameter / 2, hubDiameter / 2, thickness * 1.02, 28),
+        new THREE.MeshStandardMaterial({ color: '#d8dde4', roughness: 0.3, metalness: 0.85 }),
+      );
+      assembly.add(hubCap);
+      const axle = new THREE.Mesh(
+        new THREE.CylinderGeometry(diameter * 0.05, diameter * 0.05, thickness * 1.1, 16),
+        new THREE.MeshStandardMaterial({ color: '#545b66', roughness: 0.4, metalness: 0.9 }),
+      );
+      assembly.add(axle);
+      const lugMat = new THREE.MeshStandardMaterial({ color: '#2b2f36', roughness: 0.4, metalness: 0.8 });
+      for (let i = 0; i < 5; i += 1) {
+        const a = (i / 5) * Math.PI * 2;
+        const nut = new THREE.Mesh(
+          new THREE.CylinderGeometry(hubDiameter * 0.09, hubDiameter * 0.09, thickness * 1.12, 8),
+          lugMat,
+        );
+        nut.position.set(Math.sin(a) * hubDiameter * 0.6, 0, Math.cos(a) * hubDiameter * 0.6);
+        assembly.add(nut);
+      }
+      // Spokes from hub to rim.
+      const spokeMat = new THREE.MeshStandardMaterial({ color: '#b8bec6', roughness: 0.4, metalness: 0.7 });
+      for (let i = 0; i < 5; i += 1) {
+        const a = (i / 5) * Math.PI * 2 + Math.PI / 5;
+        const spoke = new THREE.Mesh(
+          new THREE.BoxGeometry(thickness * 0.6, diameter * 0.34, diameter * 0.08),
+          spokeMat,
+        );
+        spoke.position.set(Math.sin(a) * diameter * 0.32, 0, Math.cos(a) * diameter * 0.32);
+        spoke.rotation.y = -a;
+        assembly.add(spoke);
+      }
+    }
   } else {
     const boardComponent = new THREE.Mesh(roundedBox(Math.max(width, 0.5), Math.max(height, 0.35), Math.max(depth, 0.5), 0.32), material);
     assembly.add(boardComponent);

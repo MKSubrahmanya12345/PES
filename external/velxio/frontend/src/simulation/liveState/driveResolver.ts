@@ -260,6 +260,31 @@ export function readPinEnergy(
     const carries = role === 'output' || partnerRoles.drivePins.includes(partner.pinName);
     if (!carries) continue;
 
+    // Bugfix: an h-bridge output must NOT be treated as "hot" when the bridge
+    // is in brake (both IN pins equal) or coast (both IN pins LOW and PWM on
+    // the enable pin). Previously `readPartDrive` returned `on:true` as long as
+    // the driver chip had supply on VCC/VMOT, which is always true on a wired
+    // board, so every motor wired to an L298N/L293D/TB6612/DRV8833 spun
+    // nonstop regardless of sketch state. We only apply this gate to
+    // h-bridge-style controllers, which we detect by the presence of paired
+    // direction pins (DIR, or a forward+reverse pair IN1/IN2, AIN1/AIN2, …).
+    // Single-command controllers like relays (VCC/GND/IN/COM/NO/NC) have a
+    // plain switch output and must still conduct when their coil is energised.
+    let skipOutput = false;
+    if (role === 'output' && partnerRoles.controller) {
+      const isHBridge =
+        partnerRoles.all.includes('DIR') ||
+        (partnerRoles.all.includes('IN1') && partnerRoles.all.includes('IN2')) ||
+        (partnerRoles.all.includes('AIN1') && partnerRoles.all.includes('AIN2')) ||
+        (partnerRoles.all.includes('BIN1') && partnerRoles.all.includes('BIN2')) ||
+        (partnerRoles.all.includes('RPWM') && partnerRoles.all.includes('LPWM'));
+      if (isHBridge) {
+        const dir = directionOf(state, partnerComponent.id, partnerRoles);
+        if (dir === undefined) skipOutput = true; // brake or coast
+      }
+    }
+    if (skipOutput) continue;
+
     const upstream = readPartDrive(state, partnerComponent.id, partnerRoles, depth + 1, seen);
     if (!upstream.on) continue;
     const routed: Energy = {

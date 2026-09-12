@@ -116,7 +116,10 @@ describe('Esp32Bridge — WiFi flag', () => {
     bridge.disconnect();
   });
 
-  it('sends wifi_enabled=false by default in start_esp32', () => {
+  it('sends wifi_enabled=true by default in start_esp32', () => {
+    // Wifi is enabled by default so sketches calling WiFi.begin() get a NIC
+    // without requiring an extra toggle; this matches real hardware where
+    // the radio is always present (see #262).
     bridge.connect();
     ws = (bridge as any).socket as MockWebSocket;
     ws.open();
@@ -124,18 +127,18 @@ describe('Esp32Bridge — WiFi flag', () => {
     expect(ws.sent.length).toBeGreaterThan(0);
     const msg = JSON.parse(ws.sent[0]);
     expect(msg.type).toBe('start_esp32');
-    expect(msg.data.wifi_enabled).toBe(false);
+    expect(msg.data.wifi_enabled).toBe(true);
   });
 
-  it('sends wifi_enabled=true when wifiEnabled is set before connect', () => {
-    bridge.wifiEnabled = true;
+  it('sends wifi_enabled=false when wifiEnabled is explicitly cleared before connect', () => {
+    bridge.wifiEnabled = false;
     bridge.connect();
     ws = (bridge as any).socket as MockWebSocket;
     ws.open();
 
     const msg = JSON.parse(ws.sent[0]);
     expect(msg.type).toBe('start_esp32');
-    expect(msg.data.wifi_enabled).toBe(true);
+    expect(msg.data.wifi_enabled).toBe(false);
   });
 
   it('includes board type in start_esp32', () => {

@@ -7,6 +7,7 @@ import { useSimulatorStore } from '../store/useSimulatorStore';
 import { useCadModels, resolvePinWorld, type LoadedModel } from './models3d';
 import { useCadSpec, useParametricModels } from './cadCatalog';
 import { LivePartSurfaces } from './live/LivePartSurfaces';
+import { LiveGround } from './live/LiveGround';
 import { OrientationGizmo } from './OrientationGizmo';
 import { IntakeHud } from './live/IntakeHud';
 import { reportInstances, reportWires } from './live/intakeReport';
@@ -374,6 +375,11 @@ function Scene({
 
       <OrbitControls makeDefault enableDamping dampingFactor={0.08} />
       <OrientationGizmo />
+      {/* Live-ground physics + car assembly agent: reads already-published
+          motor drive from the render store and moves whole bodies (cars,
+          drones) around the bench. Runs entirely off existing live state —
+          no second simulation. */}
+      <LiveGround />
     </>
   );
 }
