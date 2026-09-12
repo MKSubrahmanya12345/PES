@@ -137,15 +137,15 @@ export function PromptForm() {
             </>
           )}
         </span>
-        <label className="prompt-form__direct">
-          <input
-            type="checkbox"
-            checked={direct}
-            onChange={(event) => setDirect(event.target.checked)}
-            disabled={busy}
-          />
-          skip the doubt session
-        </label>
+          <label className="prompt-form__direct-improved">
+            <input
+              type="checkbox"
+              checked={direct}
+              onChange={(event) => setDirect(event.target.checked)}
+              disabled={busy}
+            />
+
+          </label>
         <button type="submit" className="btn btn--primary" disabled={busy || tooLong}>
           {busy ? 'Opening bench…' : direct ? 'Build it now' : 'Start with the questions'}
         </button>

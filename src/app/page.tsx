@@ -61,34 +61,20 @@ export default function HomePage() {
           <div className="landing__beacon" aria-hidden="true">
             <span className="landing__beacon-orbit landing__beacon-orbit--outer" />
             <span className="landing__beacon-orbit landing__beacon-orbit--inner" />
-            <span className="landing__beacon-core">W</span>
-            <span className="landing__beacon-label">idea / signal / build</span>
+            <div className="landing__beacon-core">
+              <img src="/logo.png" alt="Wireup" className="landing__beacon-logo" />
+            </div>
+
           </div>
-          <div className="landing__signal" aria-hidden="true">
-            <span className="landing__signal-line" />
-            <span>bench 01 / intake</span>
-            <span className="landing__signal-line landing__signal-line--short" />
-          </div>
-          <p className="landing__eyebrow">BRIEF / DOUBTS / GRAPH / BUILD / EVERFLOW</p>
+
           <h1 className="landing__title">From "what if?" to wires on the bench.</h1>
           <p className="landing__subtitle">
             Give Wireup the messy version of your hardware idea. It settles the open questions with you, builds a
             grounded plan with real parts, power, pins and firmware — then keeps iterating on the project graph
             until every goal is met.
           </p>
-
-          <div className="landing__form-label">
-            <span>Tell the bench what you're making</span>
-            <span className="landing__form-label-detail">one brief in · questions settled · a living project out</span>
-          </div>
           <PromptForm />
 
-          <div className="landing__proof">
-            <span className="landing__proof-mark" aria-hidden="true" />
-            <p className="landing__note">
-              A fresh project every time. No account, no recycled plans, no black box between the brief and the bench.
-            </p>
-          </div>
         </div>
       </main>
     </>
