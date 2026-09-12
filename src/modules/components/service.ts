@@ -50,6 +50,75 @@ export function invalidateCatalogCache(): void {
  * Load the catalog. MongoDB is authoritative; when it is unreachable or empty
  * the bundled seed is used so generation never dead-ends.
  */
+/**
+ * Merge persisted catalog data with the bundled registry without allowing a
+ * stale database row to erase a newer catalog capability.
+ *
+ * MongoDB may contain an older copy of a part (for example, a capacitor row
+ * without its simulator mapping, or a database seeded before a new board was
+ * added). Returning that partial row as authoritative makes downstream stages
+ * behave as if the part did not exist. The bundled definition is the canonical
+ * baseline; persisted values may refine it, but empty structural fields and
+ * missing simulator metadata are hydrated from the baseline.
+ */
+function reconcileCatalog(persisted: ComponentDefinition[]): {
+  components: ComponentDefinition[];
+  changed: ComponentDefinition[];
+} {
+  const persistedById = new Map(persisted.map((component) => [component.id, component]));
+  const components: ComponentDefinition[] = [];
+  const changed: ComponentDefinition[] = [];
+
+  const merge = (seed: ComponentDefinition, current: ComponentDefinition): ComponentDefinition => {
+    const merged: ComponentDefinition = {
+      ...seed,
+      ...current,
+      name: current.name || seed.name,
+      description: current.description || seed.description,
+      voltage: current.voltage ?? seed.voltage,
+      minVoltage: current.minVoltage ?? seed.minVoltage,
+      maxVoltage: current.maxVoltage ?? seed.maxVoltage,
+      currentRequirements: current.currentRequirements ?? seed.currentRequirements,
+      pins: current.pins.length > 0 ? current.pins : seed.pins,
+      pinTypes: current.pinTypes.length > 0 ? current.pinTypes : seed.pinTypes,
+      communicationProtocols: current.communicationProtocols.length > 0 ? current.communicationProtocols : seed.communicationProtocols,
+      powerPins: current.powerPins.length > 0 ? current.powerPins : seed.powerPins,
+      groundPins: current.groundPins.length > 0 ? current.groundPins : seed.groundPins,
+      motorRequirements: current.motorRequirements ?? seed.motorRequirements,
+      powerSourceRequirements: current.powerSourceRequirements ?? seed.powerSourceRequirements,
+      libraryRequirements: current.libraryRequirements?.length ? current.libraryRequirements : seed.libraryRequirements,
+      exampleUsage: current.exampleUsage?.length ? current.exampleUsage : seed.exampleUsage,
+      aliases: current.aliases.length > 0 ? current.aliases : seed.aliases,
+      keywords: current.keywords.length > 0 ? current.keywords : seed.keywords,
+      simulator: current.simulator
+        ? {
+            ...seed.simulator,
+            ...current.simulator,
+            attrs: { ...(seed.simulator?.attrs ?? {}), ...(current.simulator.attrs ?? {}) },
+          }
+        : seed.simulator,
+      metadata: { ...seed.metadata, ...current.metadata },
+    };
+    return merged;
+  };
+
+  // Preserve catalog order from the persisted store, then append new bundled
+  // entries in seed order so UI ordering remains stable between reads.
+  for (const current of persisted) {
+    const seed = SEED_COMPONENTS.find((component) => component.id === current.id);
+    const merged = seed ? merge(seed, current) : current;
+    components.push(merged);
+    if (seed && JSON.stringify(merged) !== JSON.stringify(current)) changed.push(merged);
+  }
+  for (const seed of SEED_COMPONENTS) {
+    if (persistedById.has(seed.id)) continue;
+    components.push(seed);
+    changed.push(seed);
+  }
+
+  return { components, changed };
+}
+
 export async function getCatalog(): Promise<CatalogState> {
   if (cache.state && Date.now() < cache.expiresAt) return cache.state;
 
@@ -74,6 +143,22 @@ export async function getCatalog(): Promise<CatalogState> {
     } else {
       components = SEED_COMPONENTS;
       source = 'seed';
+    }
+  } else {
+    const reconciled = reconcileCatalog(components);
+    components = reconciled.components;
+    if (reconciled.changed.length > 0) {
+      source = 'mongodb+seed';
+      if (env().agent.autoseedComponents) {
+        try {
+          const upsert = await upsertComponents(reconciled.changed);
+          logger.info('reconciled catalog with bundled registry', { inserted: upsert.inserted, total: upsert.total, changed: reconciled.changed.length });
+        } catch (reconcileError) {
+          const message = reconcileError instanceof Error ? reconcileError.message : String(reconcileError);
+          error = error ? `${error}; catalog reconciliation failed: ${message}` : `catalog reconciliation failed: ${message}`;
+          logger.warn('catalog reconciliation failed, serving the reconciled in-memory view', { error: message });
+        }
+      }
     }
   }
 

@@ -227,21 +227,37 @@ export interface VelxioProjectInput {
  */
 function flattenFiles(files: Pick<GeneratedCodeFile, 'path' | 'content'>[]): {
   group: { name: string; content: string }[];
-  collisions: string[];
+  renamed: { path: string; name: string }[];
 } {
   const group: { name: string; content: string }[] = [];
-  const collisions: string[] = [];
+  const renamed: { path: string; name: string }[] = [];
   const seen = new Set<string>();
   for (const file of files) {
-    const name = file.path.split('/').pop() ?? file.path;
+    const basename = file.path.split('/').pop() ?? file.path;
+    let name = basename;
     if (seen.has(name)) {
-      collisions.push(file.path);
-      continue;
+      /*
+       * Velxio file groups are flat, but dropping the second file makes a
+       * valid generated build incomplete. Preserve every source under a stable
+       * path-derived name instead. The first basename remains unchanged so
+       * normal Arduino entry-point includes continue to work.
+       */
+      const parent = file.path.split('/').slice(-2, -1)[0] ?? 'source';
+      const extensionIndex = basename.lastIndexOf('.');
+      const stem = extensionIndex > 0 ? basename.slice(0, extensionIndex) : basename;
+      const extension = extensionIndex > 0 ? basename.slice(extensionIndex) : '';
+      name = `${parent}-${stem}${extension}`;
+      let suffix = 2;
+      while (seen.has(name)) {
+        name = `${parent}-${stem}-${suffix}${extension}`;
+        suffix += 1;
+      }
+      renamed.push({ path: file.path, name });
     }
     seen.add(name);
     group.push({ name, content: file.content });
   }
-  return { group, collisions };
+  return { group, renamed };
 }
 
 /** Only sources belong in the compile group — a README would fail the build. */
@@ -249,17 +265,42 @@ function isCompilableSource(path: string): boolean {
   return /\.(ino|h|hpp|c|cpp|cc)$/i.test(path);
 }
 
+/**
+ * A persisted diagram can predate a catalog reconciliation. Rehydrate its
+ * simulator hints from the canonical catalog id before projecting it, so an
+ * old artifact cannot turn a real mapped capacitor or board into a CAD-only
+ * part merely because its stored diagram was generated from a stale catalog
+ * row. Unknown/custom ids retain the diagram's own mapping.
+ */
+function hydrateCatalogMappings(diagram: Diagram): Diagram {
+  return {
+    ...diagram,
+    components: diagram.components.map((component) => {
+      const canonical = getSeedComponent(component.ref);
+      if (!canonical?.simulator) return component;
+      return {
+        ...component,
+        name: canonical.name,
+        category: canonical.category,
+        simulator: canonical.simulator,
+      };
+    }),
+  };
+}
+
 export function generateVelxioProject(input: VelxioProjectInput): VelxioProjectResult {
-  const projection = toWokwiDiagram(input.diagram);
+  const canonicalDiagram = hydrateCatalogMappings(input.diagram);
+  const projection = toWokwiDiagram(canonicalDiagram);
   const wokwi = projection.diagram;
   const unsupported: string[] = [];
+  const warnings: string[] = [...projection.warnings];
 
   const boardPart = wokwi.parts.find((part) => BOARD_KIND_BY_WOKWI_TYPE[part.type] !== undefined);
-  const diagramController = input.diagram.components.find((component) => component.category === 'microcontroller');
+  const diagramController = canonicalDiagram.components.find((component) => component.category === 'microcontroller');
   const kindFromDiagram = diagramController ? BOARD_KIND_BY_CATALOG_ID[diagramController.ref] : undefined;
   const boardKind = boardPart
     ? (BOARD_KIND_BY_WOKWI_TYPE[boardPart.type] as string)
-    : kindFromDiagram ?? 'arduino-uno';
+    : kindFromDiagram ?? 'unsupported';
   if (!boardPart) {
     const skipped = projection.skippedParts.find((part) => part.id === diagramController?.id);
     unsupported.push(
@@ -267,8 +308,8 @@ export function generateVelxioProject(input: VelxioProjectInput): VelxioProjectR
         ? `board: the controller (${diagramController?.ref}) was not placed in the simulator projection` +
           `${skipped ? ` — ${skipped.reason}` : ''}, so the canvas opens as a ${boardKind} from the diagram itself. ` +
           'The parts are inspectable, but wires to the board and the firmware run are not reproduced.'
-        : 'board: no controller in this diagram maps to a Velxio board — the project opens with an Arduino Uno so the ' +
-          'parts are still inspectable, but the firmware will not run.',
+        : 'board: no controller in this diagram maps to a Velxio board — no lookalike board was inserted, so the ' +
+          'project is not runnable until the selected controller has a verified catalog mapping.',
     );
   }
   const boardPartIds = new Set(
@@ -321,9 +362,9 @@ export function generateVelxioProject(input: VelxioProjectInput): VelxioProjectR
    * the CAD bench tier below instead of vanishing from both.
    */
   const projectedIds = new Set(components.map((component) => component.id));
-  const componentById = new Map(input.diagram.components.map((component) => [component.id, component]));
+  const componentById = new Map(canonicalDiagram.components.map((component) => [component.id, component]));
   let cadRow = 0;
-  for (const component of input.diagram.components) {
+  for (const component of canonicalDiagram.components) {
     if (projectedIds.has(component.id)) continue;
     if (!isCadBenchComponent(component)) continue;
     const catalogId = component.ref;
@@ -445,7 +486,7 @@ export function generateVelxioProject(input: VelxioProjectInput): VelxioProjectR
    * instead of exported — Velxio would drop such a wire silently on import.
    */
   const boardInstanceIds = new Set(
-    input.diagram.components
+    canonicalDiagram.components
       .filter((component) => component.category === 'microcontroller')
       .map((component) => component.id),
   );
@@ -454,7 +495,7 @@ export function generateVelxioProject(input: VelxioProjectInput): VelxioProjectR
     wires.map((wire) => `${endpointKey(wire.start.componentId, wire.start.pinName)}>${endpointKey(wire.end.componentId, wire.end.pinName)}`),
   );
 
-  input.diagram.connections.forEach((connection, index) => {
+  canonicalDiagram.connections.forEach((connection, index) => {
     const touchesCad = cadBenchIds.has(connection.from.component) || cadBenchIds.has(connection.to.component);
     if (!touchesCad) return; // simulated-tier wires were built above
 
@@ -564,11 +605,9 @@ export function generateVelxioProject(input: VelxioProjectInput): VelxioProjectR
     ? sources.find((file) => file.path === input.entryPoint)
     : sources.find((file) => file.path.endsWith('.ino'));
   const ordered = entry ? [entry, ...sources.filter((file) => file !== entry)] : sources;
-  const { group, collisions } = flattenFiles(ordered);
-  for (const collision of collisions) {
-    unsupported.push(
-      `file:${collision} — two firmware files flatten to the same name inside the Velxio file group; only the first was kept.`,
-    );
+  const { group, renamed } = flattenFiles(ordered);
+  for (const entry of renamed) {
+    warnings.push(`file:${entry.path} was renamed to ${entry.name} inside the Velxio file group so every source is preserved.`);
   }
   if (group.length === 0) {
     unsupported.push('firmware: no compilable source in this build, so the board opens with an empty sketch.');
@@ -602,7 +641,7 @@ export function generateVelxioProject(input: VelxioProjectInput): VelxioProjectR
     project,
     json: JSON.stringify(project, null, 2),
     unsupported,
-    warnings: projection.warnings,
+    warnings,
     cadBench,
   };
 }
