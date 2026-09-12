@@ -28,7 +28,7 @@ export function isFableModel(modelId: string | undefined | null): boolean {
   return detectModelFamily(modelId) === 'fable';
 }
 
-export type EffortOp = 'intake' | 'generation' | 'validation' | 'fix' | 'codegen' | 'idea_expansion' | 'idea_r2' | 'idea_review';
+export type EffortOp = 'intake' | 'generation' | 'validation' | 'fix' | 'codegen' | 'idea_expansion' | 'idea_r2' | 'idea_review' | 'assembly';
 
 /**
  * Default effort per operation. Env overrides (`WIREUP_MODEL_EFFORT_*`)
@@ -40,6 +40,7 @@ export function defaultEffort(op: EffortOp): EffortLevel {
       return 'low'; // one cheap boolean probe
     case 'intake':
     case 'idea_expansion':
+    case 'assembly':
       return 'medium'; // structured proposals, bounded schema
     case 'generation':
     case 'codegen':

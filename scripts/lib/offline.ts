@@ -65,6 +65,7 @@ export function initialProject(id: string, prompt: string): ProjectState {
     pinAssignments: [],
     wiring: null,
     softwarePlan: null,
+    assembly: null,
     artifacts: { code: null, diagram: null, libraries: null, instructions: null },
     validation: null,
     revisions: [],

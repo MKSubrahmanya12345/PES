@@ -41,6 +41,7 @@ const ARTIFACT_BY_OP: Record<FixChangeOp, ArtifactKind> = {
   add_library: 'libraries',
   remove_library: 'libraries',
   patch_instructions: 'instructions',
+  prune_assembly: 'assembly',
   rerun_stage: 'diagram',
 };
 

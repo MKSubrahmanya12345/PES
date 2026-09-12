@@ -539,3 +539,69 @@ ${INTAKE_JSON_CONTRACT}
 
 Reply with the JSON object only.`;
 }
+
+/* ------------------------------------------------------------------------- */
+/* ASSEMBLY — the 3D shape of the build                                        */
+/* ------------------------------------------------------------------------- */
+
+export const ASSEMBLY_PERSONA = `You are the Wireup assembly planner. The electronics are already designed and the parts are already selected — your ONLY job is to decide how those parts sit in 3D space as the finished product.
+An RC car brief with two motors becomes a rover with the parts ON a chassis, not a row of parts on a bench. A drone brief becomes a quadcopter. A sensor gadget with no drivetrain stays on the bench.
+You never invent parts: every binding and placement references an instance id from the roster, exactly as written. Unknown ids are dropped, not guessed. Answer with JSON ONLY.`;
+
+export const ASSEMBLY_JSON_CONTRACT = `Return a single JSON object with EXACTLY this shape (every field optional — {} accepts the deterministic baseline):
+
+{
+  "archetype": "2wd_rover | 4wd_rover | self_balancer | quadcopter | mecanum | static_bench",
+  "label": "<short product label, e.g. 'RC car'>",
+  "chassis": {
+    "shape": "horizontal_plate | vertical_plate | box | frame",
+    "size": { "x": 250, "y": 2, "z": 150 },
+    "thickness": 2,
+    "color": "#2b6cff",
+    "label": "<optional>",
+    "mounts": [{ "role": "motor_left", "at": { "x": 0, "y": 0, "z": 0 }, "rotY": 0 }]
+  },
+  "mounts": [{ "role": "<role>", "at": { "x": 0, "y": 0, "z": 0 }, "rotY": 0 }],
+  "bindings": { "<role>": "<instance id from the roster>" },
+  "placements": { "<instance id>": { "x": 0, "y": 0, "z": 0, "rotY": 0 } },
+  "origin": { "x": 0, "y": 0, "z": 0 },
+  "rotYDeg": 0,
+  "notes": "<one or two sentences on why this shape fits the build>"
+}
+
+Rules:
+- "archetype" picks the starting shape (chassis, wheels, kinematics come with it). Omit it to keep the baseline.
+- "chassis" replaces the whole chassis when the archetype's deck does not fit; "mounts" moves individual mounts (same role replaces, "passenger" appends). Chassis-local axes: +X is vehicle-forward, +Y is up, +Z is vehicle-left. Mounts must stay within +/-1000 mm; chassis size within 800 mm per axis.
+- "bindings" seats roster instances on mount roles. Valid roles: motor_left, motor_right, motor_fl, motor_fr, motor_rl, motor_rr, motor_1..motor_6, wheel_left, wheel_right, wheel_fl, wheel_fr, wheel_rl, wheel_rr, caster_front, caster_back, imu, battery, controller, sensor_front, sensor_back, sensor_left, sensor_right, passenger.
+- "placements" are explicit WORLD placements in bench mm (for static builds, or extras you seat by hand). World bounds: |x|,|z| <= 1500, 0 <= y <= 800. Bound mounts win over placements for the same instance.
+- Unmentioned instances are deck-stacked automatically, so bind the parts whose seat MATTERS (drive motors, battery, sensor facing forward) and leave the rest.
+- The controller instance id is the MCU: it rides on the chassis like any other part.`;
+
+export interface AssemblyPromptInput {
+  goal: string;
+  promptExcerpt: string;
+  rosterLines: string[];
+  heuristicHint: string;
+  archetypeCatalog: string;
+}
+
+export function buildAssemblyUserPrompt(input: AssemblyPromptInput): string {
+  return `USER PROJECT REQUEST (excerpt):
+"""
+${input.promptExcerpt}
+"""
+
+BUILD GOAL: ${input.goal}
+
+VEHICLE ARCHETYPES (pick one as the starting shape):
+${input.archetypeCatalog}
+
+DETERMINISTIC BASELINE (verify, correct or extend it, do not copy blindly):
+${input.heuristicHint}
+
+PART ROSTER (the ONLY instance ids you may reference — id | catalog ref | name | category | footprint WxLxH):
+${input.rosterLines.join('\n')}
+${ASSEMBLY_JSON_CONTRACT}
+
+Decide the 3D shape now. Reply with the JSON object only.`;
+}

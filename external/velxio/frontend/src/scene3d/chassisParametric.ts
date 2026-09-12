@@ -87,8 +87,9 @@ function buildVerticalPlate(spec: ChassisSpec): THREE.Group {
   const { x: X, y: Y, z: Z } = spec.size;
   const t = spec.thickness ?? 2;
   const mat = bodyMaterial(spec);
-  // Main vertical plate standing on the axle line (x=-10 is axle offset)
-  const plate = new THREE.Mesh(new THREE.BoxGeometry(t, Y, X), mat);
+  // Main vertical plate standing on the axle line (x=-10 is axle offset).
+  // Thin in Z (the thickness), wide in X (forward) — mounts on both faces.
+  const plate = new THREE.Mesh(new THREE.BoxGeometry(X, Y, t), mat);
   // Orient so that X is forward, Y is up, plate spans Y/0..Y and X/-W/2..W/2
   plate.geometry.translate(0, Y/2, 0);
   plate.position.set(0, 0, 0);
@@ -99,9 +100,9 @@ function buildVerticalPlate(spec: ChassisSpec): THREE.Group {
   const top = new THREE.Mesh(new THREE.BoxGeometry(t + 8, 14, 60), bodyMaterial(spec, 0.6, 0.15));
   top.position.set(0, Y - 7, 0);
   g.add(top);
-  // Bottom axle clamp
+  // Bottom axle clamp (sits on the axle line with the motors)
   const clamp = new THREE.Mesh(new THREE.BoxGeometry(t + 12, 20, 40), new THREE.MeshStandardMaterial({ color: 0x202020, metalness: 0.7, roughness: 0.4 }));
-  clamp.position.set(0, 10, 0);
+  clamp.position.set(-10, 10, 0);
   g.add(clamp);
   addMountDots(g, spec.mounts, t);
   return g;
@@ -129,27 +130,33 @@ function buildFrame(spec: ChassisSpec): THREE.Group {
   const { x: X, y: Y, z: Z } = spec.size;
   const armMat = new THREE.MeshStandardMaterial({ color: hex(spec.color, 0x222222), metalness: 0.6, roughness: 0.4 });
   const armR = 6;
-  // Two X arms, two Z arms forming a cross
-  const armX = new THREE.Mesh(new THREE.CylinderGeometry(armR, armR, X, 12), armMat);
-  armX.rotation.z = Math.PI/2;
-  armX.position.y = Y/2;
-  g.add(armX);
-  const armZ = new THREE.Mesh(new THREE.CylinderGeometry(armR, armR, Z, 12), armMat);
-  armZ.rotation.x = Math.PI/2;
-  armZ.position.y = Y/2;
-  g.add(armZ);
+  void X; void Z;
+  // X arms to the motor pods: length from the furthest motor mount so the
+  // arms always reach the motors, whatever layout the spec uses.
+  let reach = 60;
+  for (const mount of spec.mounts ?? []) {
+    if (!mount.role.startsWith('motor_')) continue;
+    reach = Math.max(reach, Math.hypot(mount.at.x, mount.at.z) + 15);
+  }
+  const armGeom = new THREE.CylinderGeometry(armR, armR, reach * 2, 12);
+  armGeom.rotateX(Math.PI / 2); // lie along Z, then yaw into the diagonals
+  for (const yaw of [Math.PI / 4, -Math.PI / 4]) {
+    const arm = new THREE.Mesh(armGeom, armMat);
+    arm.rotation.y = yaw;
+    arm.position.y = Y / 2;
+    g.add(arm);
+  }
   // Central hub
   const hub = new THREE.Mesh(new THREE.CylinderGeometry(22, 22, 12, 20), new THREE.MeshStandardMaterial({ color: 0x303030, metalness: 0.7, roughness: 0.3 }));
   hub.position.y = Y/2;
   g.add(hub);
-  // Motor pods at each diagonal end
+  // Motor pods sit under the motor mounts (not at fixed corners).
   const podGeom = new THREE.CylinderGeometry(10, 10, 14, 18);
-  for (const sx of [-1, 1]) {
-    for (const sz of [-1, 1]) {
-      const pod = new THREE.Mesh(podGeom, armMat);
-      pod.position.set(sx * X/2, Y/2, sz * Z/2);
-      g.add(pod);
-    }
+  for (const mount of spec.mounts ?? []) {
+    if (!mount.role.startsWith('motor_')) continue;
+    const pod = new THREE.Mesh(podGeom, armMat);
+    pod.position.set(mount.at.x, Y/2, mount.at.z);
+    g.add(pod);
   }
   return g;
 }

@@ -10,6 +10,7 @@
 import mongoose, { type Model, type Types } from 'mongoose';
 
 import type { ComponentSelection } from '@/types/component';
+import type { ResolvedAssemblyPlan } from '@/types/assembly';
 import type { AgentEvent } from '@/types/generation';
 import type { ExpandedBrief, EverflowState, HumanTask, ProjectDoubt, ResearchFinding, IdeaGraphState } from '@/types/everflow';
 import type { ProjectAtlasState } from '@/types/project-atlas';
@@ -47,6 +48,7 @@ export interface ProjectDocument {
   pinAssignments: PinAssignment[];
   wiring: WiringPlan | null;
   softwarePlan: SoftwarePlan | null;
+  assembly: ResolvedAssemblyPlan | null;
   artifacts: ProjectArtifacts;
   validation: ValidationResult | null;
   revisions: ProjectRevision[];
@@ -106,6 +108,7 @@ const ProjectSchema = new mongoose.Schema(
     pinAssignments: { type: Mixed, default: [] },
     wiring: { type: Mixed, default: null },
     softwarePlan: { type: Mixed, default: null },
+    assembly: { type: Mixed, default: null },
     artifacts: {
       type: Mixed,
       default: { code: null, diagram: null, libraries: null, instructions: null },

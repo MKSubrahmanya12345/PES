@@ -44,6 +44,7 @@ import { nowIso } from '@/lib/validation/time';
 import { normalizeRequirements, understandPrompt } from '@/modules/project-understanding';
 import { formatAnalysisForPrompt } from '@/modules/project-understanding/heuristics';
 import { planHardware } from '@/modules/hardware-planner';
+import { planAssembly, rosterFromDiagram } from '@/modules/assembly-planner';
 import { runHardwareAgent } from '@/modules/agent';
 import { buildGenerationContext, controllerInfo, type GenerationContext } from './context';
 
@@ -77,6 +78,7 @@ type StagePatch = Partial<
     | 'pinAssignments'
     | 'wiring'
     | 'softwarePlan'
+    | 'assembly'
     | 'artifacts'
     | 'llm'
     | 'revision'
@@ -354,6 +356,77 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineOutput>
   await stage({ artifacts }, 'code');
   await stage({}, 'libraries');
   await stage({}, 'diagram');
+
+  /* --- 6. 3D assembly (the model authors the shape, with a deterministic
+   * fallback) ---------------------------------------------------------------
+   *
+   * Needs the diagram's instance ids, so it runs after the agent stage. A
+   * failure here never fails the build: the bench grid is the honest
+   * fallback, and the event log says the assembly was skipped.
+   */
+  const assemblyHandle = events.start('assembly_started', 'Deciding the 3D shape of the build...', {
+    stage: 'assembly',
+  });
+  let assembly: ProjectState['assembly'] = null;
+  try {
+    const roster = rosterFromDiagram(diagram);
+    if (roster.length === 0) {
+      assemblyHandle.complete('No seatable parts — skipping the 3D assembly.', { parts: 0 });
+    } else {
+      const callStarted = nowIso();
+      const startedAt = Date.now();
+      const result = await planAssembly({ prompt: effectivePrompt(base), goal: requirements.goal, roster });
+      assembly = result.plan;
+      if (result.call) {
+        llmCalls.push({
+          id: createId('llm'),
+          op: 'assembly',
+          model: result.call.model,
+          startedAt: callStarted,
+          finishedAt: nowIso(),
+          durationMs: Date.now() - startedAt,
+          status: result.call.ok ? 'ok' : 'failed',
+          ...(result.call.inputTokens !== undefined ? { inputTokens: result.call.inputTokens } : {}),
+          ...(result.call.outputTokens !== undefined ? { outputTokens: result.call.outputTokens } : {}),
+          ...(result.call.error ? { error: result.call.error } : {}),
+          iteration: 0,
+        });
+      }
+      const seated = Object.keys(assembly.placements).length + assembly.parametric.length;
+      assemblyHandle.complete(
+        `Assembled as ${assembly.label} — ${seated} of ${roster.length} part(s) seated (${assembly.source}).`,
+        {
+          archetype: assembly.archetype,
+          source: assembly.source,
+          seated,
+          total: roster.length,
+          warnings: assembly.warnings.length,
+        },
+      );
+      if (assembly.warnings.length > 0) {
+        notes.push(`3D assembly warnings: ${assembly.warnings.slice(0, 3).join(' ')}`);
+      }
+    }
+  } catch (error) {
+    const described = describeError(error);
+    assemblyHandle.fail(
+      `3D assembly failed (${described.message}) — the default bench layout still applies.`,
+      described.message,
+      { stage: 'assembly' },
+    );
+    notes.push(`3D assembly failed (${described.message}); the build renders in the default bench layout.`);
+  }
+  if (llmCalls.some((call) => call.op === 'assembly')) {
+    await stage(
+      {
+        assembly,
+        llm: { model: state.llm?.model ?? bedrock.model ?? 'unknown', validationModel: bedrock.validationModel, calls: llmCalls },
+      },
+      'assembly',
+    );
+  } else {
+    await stage({ assembly }, 'assembly');
+  }
   await stage({}, 'instructions');
 
   /* --- Done --------------------------------------------------------------- */

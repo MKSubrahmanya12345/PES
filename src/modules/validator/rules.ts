@@ -26,6 +26,7 @@ import {
 import { issueId } from '@/lib/validation/ids';
 
 import { analyzeCoverage } from '@/modules/project-understanding';
+import { dimsFor, isAxleJoint } from '@/modules/assembly-planner/heuristics';
 import { isProvisional, provisionalVerification } from '@/modules/components/contracts';
 import { braceBalance } from '@/modules/code-generator';
 import { stripCodeComments } from '@/modules/code-generator/comments';
@@ -69,6 +70,8 @@ export const AUTO_FIXABLE_CODES: ValidationIssueCode[] = [
   'missing_component',
   'quantity_shortfall',
   'behavioral_assertion_failed',
+  'assembly_unknown_part',
+  'assembly_bad_placement',
 ];
 
 export interface RuleContext {
@@ -1039,6 +1042,107 @@ export function runRuleEngine(context: RuleContext): RuleEngineResult {
     }
   }
   finishCheck('instructions.completeness', 'Instruction completeness', 'instructions', mark, 'Instructions cover every required section');
+
+  /* 12. 3D assembly --------------------------------------------------------- */
+  mark = issues.length;
+  const assembly = project.assembly;
+  if (assembly && diagram) {
+    const diagramIds = new Set(diagram.components.map((component) => component.id));
+    const refById = new Map(diagram.components.map((component) => [component.id, component.ref]));
+    for (const [role, id] of Object.entries(assembly.bindings)) {
+      if (id && !diagramIds.has(id)) {
+        add('assembly', {
+          code: 'assembly_unknown_part',
+          severity: 'error',
+          domain: 'assembly',
+          message: `3D seat "${role}" points at "${id}", which is no longer in diagram.json.`,
+          fixHint: 'Prune the stale 3D seats.',
+          target: { artifact: 'assembly', componentInstanceId: id },
+        });
+      }
+    }
+    for (const [id, seat] of Object.entries(assembly.placements)) {
+      if (!diagramIds.has(id)) {
+        add('assembly', {
+          code: 'assembly_unknown_part',
+          severity: 'error',
+          domain: 'assembly',
+          message: `3D placement for "${id}", which is no longer in diagram.json.`,
+          fixHint: 'Prune the stale 3D seats.',
+          target: { artifact: 'assembly', componentInstanceId: id },
+        });
+        continue;
+      }
+      const finiteSeat =
+        seat && Number.isFinite(seat.x) && Number.isFinite(seat.y) && Number.isFinite(seat.z);
+      const inBounds =
+        finiteSeat &&
+        Math.abs(seat.x) <= 1500 &&
+        seat.y >= 0 &&
+        seat.y <= 800 &&
+        Math.abs(seat.z) <= 1500 &&
+        (seat.rotY === undefined || Number.isFinite(seat.rotY));
+      if (!inBounds) {
+        add('assembly', {
+          code: 'assembly_bad_placement',
+          severity: 'error',
+          domain: 'assembly',
+          message: `3D placement for "${id}" is ${finiteSeat ? 'out of bounds' : 'not finite'} — it would render off the bench.`,
+          fixHint: 'Drop the bad seat so the part falls back to the bench grid.',
+          target: { artifact: 'assembly', componentInstanceId: id },
+        });
+      }
+    }
+    for (const id of assembly.parametric) {
+      if (!diagramIds.has(id)) {
+        add('assembly', {
+          code: 'assembly_unknown_part',
+          severity: 'error',
+          domain: 'assembly',
+          message: `Parametric 3D carrier "${id}" is no longer in diagram.json.`,
+          fixHint: 'Prune the stale 3D seats.',
+          target: { artifact: 'assembly', componentInstanceId: id },
+        });
+      }
+    }
+    // Overlaps are reported, not repaired: only a human (or a re-plan) can
+    // judge the intended layout.
+    const placedIds = Object.keys(assembly.placements).filter((id) => diagramIds.has(id));
+    let overlapReports = 0;
+    for (let i = 0; i < placedIds.length && overlapReports < 3; i++) {
+      for (let j = i + 1; j < placedIds.length && overlapReports < 3; j++) {
+        const refA = refById.get(placedIds[i]!) ?? '';
+        const refB = refById.get(placedIds[j]!) ?? '';
+        if (isAxleJoint(refA, refB)) continue;
+        const a = assembly.placements[placedIds[i]!]!;
+        const b = assembly.placements[placedIds[j]!]!;
+        const da = dimsFor(refA);
+        const db = dimsFor(refB);
+        const overlap =
+          Math.abs(a.x - b.x) < (da.w + db.w) / 2 &&
+          Math.abs(a.z - b.z) < (da.l + db.l) / 2 &&
+          Math.abs(a.y - b.y) < ((da.h + db.h) / 2) * 0.8;
+        if (overlap) {
+          overlapReports += 1;
+          add('assembly', {
+            code: 'assembly_overlap',
+            severity: 'warning',
+            domain: 'assembly',
+            message: `Possible 3D overlap: "${placedIds[i]}" intersects "${placedIds[j]}".`,
+            fixHint: 'Re-plan the 3D shape, or drag the parts apart in the 3D view.',
+            target: { artifact: 'assembly', componentInstanceId: placedIds[i] },
+          });
+        }
+      }
+    }
+  }
+  finishCheck(
+    'assembly.seats',
+    '3D assembly seats',
+    'assembly',
+    mark,
+    assembly ? 'Every 3D seat points at a real part' : 'No 3D assembly planned yet',
+  );
 
   return { checks, issues };
 }

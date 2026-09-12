@@ -448,6 +448,7 @@ function baseProject(overrides: Partial<ProjectState> = {}): ProjectState {
     pinAssignments: [],
     wiring: null,
     softwarePlan: null,
+    assembly: null,
     artifacts: {
       code: { files: [{ path: 'sketch.ino', language: 'cpp', content: 'void setup(){} void loop(){}', purpose: 'firmware', generatedBy: 'planner' }], entryPoint: 'sketch.ino' },
       diagram: null,

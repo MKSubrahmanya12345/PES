@@ -209,6 +209,7 @@ async function buildProject(): Promise<ProjectState> {
     pinAssignments: ASSIGNMENTS,
     wiring: null,
     softwarePlan: SOFTWARE_PLAN,
+    assembly: null,
     artifacts: { code, diagram: null, libraries: null, instructions: null },
     validation: null,
     revisions: [],

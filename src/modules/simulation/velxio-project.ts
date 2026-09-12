@@ -207,7 +207,10 @@ const PART_ROW_HEIGHT = 170;
  *  import; these only keep freshly imported wires from starting at the origin. */
 const PIN_OFFSET = { x: 40, y: 30 };
 
-const BOARD_ID = 'board-1';
+/** The single board id every generated `.vlx` uses (see `velxioFileGroupId`). */
+export const VLX_BOARD_ID = 'board-1';
+
+const BOARD_ID = VLX_BOARD_ID;
 
 /**
  * The file group a Velxio board compiles — and the ONLY one its editor shows.
@@ -240,6 +243,31 @@ export interface VelxioProjectInput {
   libraries?: string[];
   /** Overridden in tests so the output is byte-stable. */
   exportedAt?: string;
+  /**
+   * 3D seats from the assembly planner (diagram id → world mm). Baked into
+   * each component's properties (`x3d`/`y3d`/`z3d`/`rotY`), which is the same
+   * bag a user 3D-drag round-trips through — so the 3D scene pins parts where
+   * the assembly seated them, with no protocol changes.
+   */
+  assemblyPlacements?: Record<string, { x: number; y: number; z: number; rotY: number }>;
+}
+
+/** Bake one assembly seat into a properties bag (no seat → untouched). */
+function withAssemblyPlacement(
+  properties: Record<string, unknown>,
+  id: string,
+  placements: VelxioProjectInput['assemblyPlacements'],
+): Record<string, unknown> {
+  const seat = placements?.[id];
+  if (!seat) return properties;
+  const round2 = (value: number): number => Math.round(value * 100) / 100;
+  return {
+    ...properties,
+    x3d: round2(seat.x),
+    y3d: round2(seat.y),
+    z3d: round2(seat.z),
+    rotY: round2(seat.rotY),
+  };
 }
 
 /**
@@ -358,7 +386,12 @@ export function generateVelxioProject(input: VelxioProjectInput): VelxioProjectR
     row += 1;
     positions.set(part.id, position);
     if (refined.pins) pinRenames.set(part.id, refined.pins);
-    components.push({ id: part.id, metadataId: refined.metadataId, ...position, properties: { ...part.attrs } });
+    components.push({
+      id: part.id,
+      metadataId: refined.metadataId,
+      ...position,
+      properties: withAssemblyPlacement({ ...part.attrs }, part.id, input.assemblyPlacements),
+    });
   }
   /*
    * CAD bench parts ---------------------------------------------------------
@@ -399,7 +432,11 @@ export function generateVelxioProject(input: VelxioProjectInput): VelxioProjectR
       id: component.id,
       metadataId: cadBenchId(catalogId),
       ...position,
-      properties: { cadKey: catalogId, ...(component.simulator?.attrs ?? {}) },
+      properties: withAssemblyPlacement(
+        { cadKey: catalogId, ...(component.simulator?.attrs ?? {}) },
+        component.id,
+        input.assemblyPlacements,
+      ),
     });
     cadBench.push({ id: component.id, catalogId, name: component.name });
   }

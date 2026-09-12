@@ -262,6 +262,8 @@ export function changeSignature(change: FixChange): string {
       return `set_libraries:${change.libraries.map((library) => library.name).join(',')}`;
     case 'patch_instructions':
       return `patch_instructions:${change.sectionId}:${change.mode}`;
+    case 'prune_assembly':
+      return `prune_assembly:${[...(change.roles ?? [])].sort().join(',')}:${[...(change.instanceIds ?? [])].sort().join(',')}`;
     case 'set_field':
       return `set_field:${change.field}`;
     case 'rerun_stage':
@@ -1355,6 +1357,53 @@ function planForIssue(ctx: Ctx, issue: ValidationIssue): void {
 
     case 'library_unused':
       giveUp(ctx, issue, 'Removing a library can break conditional code paths; left for review.');
+      return;
+
+    case 'assembly_unknown_part':
+    case 'assembly_bad_placement': {
+      const plan = ctx.project.assembly;
+      const diagram = ctx.project.artifacts.diagram;
+      if (!plan || !diagram) {
+        giveUp(ctx, issue, 'There is no 3D assembly to prune.');
+        return;
+      }
+      const valid = new Set(diagram.components.map((component) => component.id));
+      const roles = Object.entries(plan.bindings)
+        .filter(([, id]) => id && !valid.has(id))
+        .map(([role]) => role);
+      const instanceIds = new Set<string>();
+      for (const [id, seat] of Object.entries(plan.placements)) {
+        const bad =
+          !valid.has(id) ||
+          !seat ||
+          !Number.isFinite(seat.x) ||
+          !Number.isFinite(seat.y) ||
+          !Number.isFinite(seat.z) ||
+          Math.abs(seat.x) > 1500 ||
+          seat.y < 0 ||
+          seat.y > 800 ||
+          Math.abs(seat.z) > 1500;
+        if (bad) instanceIds.add(id);
+      }
+      for (const id of plan.parametric) {
+        if (!valid.has(id)) instanceIds.add(id);
+      }
+      if (roles.length === 0 && instanceIds.size === 0) {
+        giveUp(ctx, issue, 'The stale 3D seats could not be identified.');
+        return;
+      }
+      push(ctx, issue, {
+        artifact: 'assembly',
+        op: 'prune_assembly',
+        roles,
+        instanceIds: [...instanceIds],
+        reason: 'Stale 3D seats are pruned so every seat points at a real part; pruned parts fall back to the bench grid.',
+      });
+      return;
+    }
+
+    case 'assembly_overlap':
+      giveUp(ctx, issue, 'Only a human (or a fresh 3D re-plan) can judge the intended layout.');
       return;
 
     case 'schema_violation':

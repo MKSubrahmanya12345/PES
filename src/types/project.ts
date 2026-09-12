@@ -4,6 +4,7 @@
  */
 
 import type { ComponentSelection, LibraryRequirement, PowerBudget } from './component';
+import type { ResolvedAssemblyPlan } from './assembly';
 import type { BehavioralSpec } from './behavioral';
 import type { Diagram } from './diagram';
 import type { AgentEvent } from './generation';
@@ -37,6 +38,7 @@ export type GenerationStage =
   | 'code'
   | 'libraries'
   | 'diagram'
+  | 'assembly'
   | 'instructions'
   | 'validating'
   | 'fixing'
@@ -215,7 +217,7 @@ export interface GenerationError {
 
 export interface LlmCallRecord {
   id: string;
-  op: 'generation' | 'validation' | 'firmware_review' | 'fix' | 'codegen';
+  op: 'generation' | 'validation' | 'firmware_review' | 'fix' | 'codegen' | 'assembly';
   model: string;
   startedAt: string;
   finishedAt?: string;
@@ -236,6 +238,7 @@ export interface RevisionSnapshot {
   diagram: Diagram | null;
   libraries: LibrariesArtifact | null;
   instructions: InstructionsArtifact | null;
+  assembly: ResolvedAssemblyPlan | null;
 }
 
 export interface ProjectRevision {
@@ -328,6 +331,11 @@ export interface ProjectState {
   pinAssignments: PinAssignment[];
   wiring: WiringPlan | null;
   softwarePlan: SoftwarePlan | null;
+  /**
+   * The 3D shape of the build (vehicle archetype, chassis, per-part seats).
+   * Planned after the diagram; null for builds that predate the stage.
+   */
+  assembly: ResolvedAssemblyPlan | null;
   artifacts: ProjectArtifacts;
   validation: ValidationResult | null;
   revisions: ProjectRevision[];
