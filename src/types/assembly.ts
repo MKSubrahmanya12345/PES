@@ -146,6 +146,12 @@ export interface AssemblyBundleView {
   placed: number;
   total: number;
   parametric: string[];
+  /**
+   * Mount roles the 3D scene draws parametrically — wheels, casters and
+   * propellers have no electrical counterpart, so the spec renders them from
+   * the archetype geometry wherever no real part claims the mount.
+   */
+  parametricRoles: string[];
   unplaced: string[];
   notes: string[];
   warnings: string[];
@@ -175,6 +181,14 @@ export interface ResolvedAssemblyPlan {
   placements: Record<string, AssemblyPlacement>;
   /** Diagram ids drawn parametrically as part of the vehicle (no own body). */
   parametric: string[];
+  /**
+   * Mount roles the scene renders parametrically (wheels, casters,
+   * propellers — mechanical extras the electrical catalog cannot supply).
+   * Roles, not instance ids, so pruning to surviving instances never
+   * touches them. Optional: plans frozen before this field existed read as
+   * "none recorded" and the scene still renders them from the spec.
+   */
+  parametricRoles?: string[];
   /** Diagram ids with no placement (bench grid). */
   unplaced: string[];
   notes: string[];

@@ -562,6 +562,7 @@ export const ASSEMBLY_JSON_CONTRACT = `Return a single JSON object with EXACTLY 
     "mounts": [{ "role": "motor_left", "at": { "x": 0, "y": 0, "z": 0 }, "rotY": 0 }]
   },
   "mounts": [{ "role": "<role>", "at": { "x": 0, "y": 0, "z": 0 }, "rotY": 0 }],
+  "wheel": { "diameterMm": 65, "widthMm": 26, "tireColor": "#1a1a1a", "color": "#b5b5b5" },
   "bindings": { "<role>": "<instance id from the roster>" },
   "placements": { "<instance id>": { "x": 0, "y": 0, "z": 0, "rotY": 0 } },
   "origin": { "x": 0, "y": 0, "z": 0 },
@@ -571,6 +572,7 @@ export const ASSEMBLY_JSON_CONTRACT = `Return a single JSON object with EXACTLY 
 
 Rules:
 - "archetype" picks the starting shape (chassis, wheels, kinematics come with it). Omit it to keep the baseline.
+- "wheel" sizes the PARAMETRIC EXTRAS. Wheels, casters and propellers are mechanical, not electrical — they are never in the roster, and the scene renders them from this spec at every wheel mount (and as the propeller disc on flying frames). Think of them and size them to the product: a desk rover wants ⌀65, an off-road build ⌀90+, a drone prop disc ⌀127. Range: ⌀20-300 mm, width 5-120 mm. A real wheel/prop part bound to the mount always wins over the parametric one.
 - "chassis" replaces the whole chassis when the archetype's deck does not fit; "mounts" moves individual mounts (same role replaces, "passenger" appends). Chassis-local axes: +X is vehicle-forward, +Y is up, +Z is vehicle-left. Mounts must stay within +/-1000 mm; chassis size within 800 mm per axis.
 - "bindings" seats roster instances on mount roles. Valid roles: motor_left, motor_right, motor_fl, motor_fr, motor_rl, motor_rr, motor_1..motor_6, wheel_left, wheel_right, wheel_fl, wheel_fr, wheel_rl, wheel_rr, caster_front, caster_back, imu, battery, controller, sensor_front, sensor_back, sensor_left, sensor_right, passenger.
 - "placements" are explicit WORLD placements in bench mm (for static builds, or extras you seat by hand). World bounds: |x|,|z| <= 1500, 0 <= y <= 800. Bound mounts win over placements for the same instance.

@@ -21,7 +21,7 @@ import {
   getArchetypeBase,
   type AssemblyArchetypeId,
 } from '@/modules/assembly-planner/archetypes';
-import { heuristicAssembly, rosterEntryFor } from '@/modules/assembly-planner/resolve';
+import { heuristicAssembly, resolveAssemblyPlan, rosterEntryFor } from '@/modules/assembly-planner/resolve';
 
 const failures: string[] = [];
 function check(cond: boolean, msg: string): void {
@@ -186,6 +186,115 @@ check(!bench.spec.chassis, 'bench: static spec should carry no chassis');
 check(isAssemblySpec(bench.spec), 'bench: resolved spec rejected by Velxio isAssemblySpec');
 
 /* -------------------------------------------------------------------------- */
+/* 5. Parametric extras — wheels/casters/props render with no parts            */
+/* -------------------------------------------------------------------------- */
+
+// The catalog is electrical: no wheel, caster or propeller parts ever appear.
+// The scene must still draw them (from spec.wheel + the mounts), and the plan
+// must say so — a car without wheels is a plank with motors.
+const bareRoster = [
+  rosterEntryFor('esp-1', 'esp32-devkit', 'ESP32 devkit', 'microcontroller'),
+  rosterEntryFor('drv-1', 'l298n', 'L298N driver', 'motor_driver'),
+  rosterEntryFor('m-left', 'tt-motor', 'TT motor', 'motor'),
+  rosterEntryFor('m-right', 'tt-motor', 'TT motor', 'motor'),
+  rosterEntryFor('sonic-1', 'hc-sr04', 'Ultrasonic sensor', 'sensor'),
+  rosterEntryFor('bat-1', 'lipo-2s', 'LiPo battery', 'power'),
+];
+const bareCar = heuristicAssembly({
+  roster: bareRoster,
+  prompt: 'bluetooth rc car',
+  goal: 'a bluetooth rc car that stops before obstacles',
+});
+check(bareCar.archetype === '2wd_rover', `bare car: archetype is ${bareCar.archetype}, want 2wd_rover`);
+check(
+  bareCar.spec.wheel?.diameterMm === 65 && bareCar.spec.wheel.widthMm === 26,
+  'bare car: the spec carries no parametric wheel geometry',
+);
+check(
+  bareCar.notes.some((n) => n.includes('parametric wheel')),
+  'bare car: no note that parametric wheels render',
+);
+check(
+  bareCar.notes.some((n) => n.includes('caster')),
+  'bare car: no note that the caster renders parametrically',
+);
+check(
+  (bareCar.parametricRoles ?? []).length === 3 &&
+    bareCar.parametricRoles!.includes('wheel_left') &&
+    bareCar.parametricRoles!.includes('wheel_right') &&
+    bareCar.parametricRoles!.includes('caster_front'),
+  `bare car: parametricRoles is ${JSON.stringify(bareCar.parametricRoles)}, want [wheel_left, wheel_right, caster_front]`,
+);
+check(isAssemblySpec(bareCar.spec), 'bare car: resolved spec rejected by Velxio isAssemblySpec');
+
+// The model sizes the extras: a valid wheel override merges over the base.
+const sized = resolveAssemblyPlan(
+  { archetype: '2wd_rover', wheel: { diameterMm: 100, widthMm: 40 } },
+  { roster: bareRoster, prompt: 'off-road rc car', goal: 'an off-road rc car' },
+).plan;
+check(
+  sized.spec.wheel?.diameterMm === 100 && sized.spec.wheel?.widthMm === 40,
+  'sized: the model wheel override did not merge into the spec',
+);
+check(sized.notes.some((n) => n.includes('⌀100')), 'sized: no note that the model sized the wheels');
+check(isAssemblySpec(sized.spec), 'sized: resolved spec rejected by Velxio isAssemblySpec');
+
+// Out-of-range overrides are dropped with a note, never silently applied.
+const absurd = resolveAssemblyPlan(
+  { archetype: '2wd_rover', wheel: { diameterMm: 9000 } },
+  { roster: bareRoster, prompt: 'rc car', goal: 'an rc car' },
+).plan;
+check(
+  absurd.spec.wheel?.diameterMm === 65,
+  'absurd: an out-of-range wheel diameter leaked into the spec',
+);
+check(absurd.notes.some((n) => n.includes('out of range')), 'absurd: no note for the rejected wheel override');
+
+// A drone with no propeller parts gets parametric props on the motors.
+const bareDrone = heuristicAssembly({
+  roster: [
+    rosterEntryFor('fc-1', 'arduino-nano', 'Arduino Nano', 'microcontroller'),
+    rosterEntryFor('bl1', 'bldc-2204', 'BLDC motor', 'motor'),
+    rosterEntryFor('bl2', 'bldc-2204', 'BLDC motor', 'motor'),
+    rosterEntryFor('bl3', 'bldc-2204', 'BLDC motor', 'motor'),
+    rosterEntryFor('bl4', 'bldc-2204', 'BLDC motor', 'motor'),
+    rosterEntryFor('imu-1', 'mpu-6050', 'IMU', 'sensor'),
+    rosterEntryFor('bat-1', 'lipo-4s', 'LiPo battery', 'power'),
+  ],
+  prompt: 'camera drone',
+  goal: 'a camera drone',
+});
+check(bareDrone.archetype === 'quadcopter', `bare drone: archetype is ${bareDrone.archetype}, want quadcopter`);
+check(
+  bareDrone.notes.some((n) => n.includes('render parametrically on the motors')),
+  'bare drone: no note that parametric propellers render',
+);
+check(
+  (bareDrone.parametricRoles ?? []).length === 4,
+  `bare drone: parametricRoles is ${JSON.stringify(bareDrone.parametricRoles)}, want the 4 motor mounts`,
+);
+check(isAssemblySpec(bareDrone.spec), 'bare drone: resolved spec rejected by Velxio isAssemblySpec');
+
+// Real parts beat stand-ins: the rosters WITH wheel/caster/prop parts (§2, §3)
+// must not claim parametric extras.
+check(
+  !car.notes.some((n) => n.includes('parametric wheel') || n.includes('render parametrically')),
+  'car: parametric extras note fired although real wheels/caster are bound',
+);
+check(
+  (car.parametricRoles ?? []).length === 0,
+  `car: parametricRoles is ${JSON.stringify(car.parametricRoles)}, want none (real wheels/caster are bound)`,
+);
+check(
+  !drone.notes.some((n) => n.includes('render parametrically on the motors')),
+  'drone: parametric prop note fired although real propellers are seated',
+);
+check(
+  (drone.parametricRoles ?? []).length === 0,
+  `drone: parametricRoles is ${JSON.stringify(drone.parametricRoles)}, want none (real props are seated)`,
+);
+
+/* -------------------------------------------------------------------------- */
 
 if (failures.length > 0) {
   console.error(`verify:assembly FAILED — ${failures.length} problem(s):`);
@@ -196,5 +305,6 @@ console.log(
   `verify:assembly OK — ${CANONICAL.length} archetypes in sync, ` +
     `car (${Object.keys(car.placements).length} seated), ` +
     `drone (${Object.keys(drone.placements).length} seated), ` +
-    `bench (${bench.unplaced.length} on the bench).`,
+    `bench (${bench.unplaced.length} on the bench), ` +
+    `parametric extras on the bare car/drone (wheels ⌀${bareCar.spec.wheel?.diameterMm}, props ⌀${bareDrone.spec.wheel?.diameterMm}).`,
 );

@@ -393,13 +393,17 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineOutput>
         });
       }
       const seated = Object.keys(assembly.placements).length + assembly.parametric.length;
+      const extras = assembly.parametricRoles?.length ?? 0;
       assemblyHandle.complete(
-        `Assembled as ${assembly.label} — ${seated} of ${roster.length} part(s) seated (${assembly.source}).`,
+        `Assembled as ${assembly.label} — ${seated} of ${roster.length} part(s) seated` +
+          `${extras > 0 ? ` + ${extras} parametric extra(s) (wheels/caster/props)` : ''}` +
+          ` (${assembly.source}).`,
         {
           archetype: assembly.archetype,
           source: assembly.source,
           seated,
           total: roster.length,
+          ...(extras > 0 ? { parametricExtras: extras } : {}),
           warnings: assembly.warnings.length,
         },
       );

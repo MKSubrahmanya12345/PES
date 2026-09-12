@@ -100,6 +100,7 @@ export function buildAssemblyView(project: ProjectState): {
       placed: seated.size,
       total: roster.length,
       parametric: pruned.plan.parametric,
+      parametricRoles: pruned.plan.parametricRoles ?? [],
       unplaced: pruned.plan.unplaced,
       notes: [...readNotes, ...pruned.plan.notes],
       warnings: pruned.plan.warnings,
