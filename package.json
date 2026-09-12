@@ -1,0 +1,60 @@
+{
+  "name": "wireup",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Wireup \u2014 agentic hardware engineering platform that turns a prompt into a validated, simulator-ready embedded project.",
+  "packageManager": "pnpm@9.15.4",
+  "engines": {
+    "node": ">=20.11.0",
+    "pnpm": ">=9.0.0"
+  },
+  "scripts": {
+    "dev": "next dev --turbopack",
+    "dev:webpack": "node -e \"require('fs').rmSync('.next',{recursive:true,force:true})\" && next dev",
+    "dev:replit": "next dev --turbopack --hostname 0.0.0.0 --port ${PORT:-3000}",
+    "dev:turbo": "next dev --turbopack",
+    "build": "next build",
+    "start": "next start",
+    "start:replit": "next start --hostname 0.0.0.0 --port ${PORT:-3000}",
+    "typecheck": "tsc --noEmit",
+    "seed": "tsx scripts/seed-components.ts",
+    "seed:components": "tsx scripts/seed-components.ts",
+    "diagnose:bedrock": "tsx scripts/diagnose-bedrock.ts",
+    "verify:offline": "tsx scripts/verify-offline-fallback.ts",
+    "verify:firmware": "tsx scripts/compile-check.ts",
+    "verify:behavioral": "tsx scripts/verify-behavioral.ts",
+    "verify:llm-codegen": "tsx scripts/verify-llm-codegen.ts",
+    "verify:workbench": "tsx scripts/verify-firmware-workbench.ts",
+    "verify:cad-link": "tsx scripts/verify-cad-link.ts",
+    "verify:cad-sim-link": "tsx scripts/verify-cad-sim-link.ts",
+    "verify:3d-live": "tsx scripts/verify-3d-live.ts",
+    "verify:everflow": "tsx scripts/verify-everflow.ts",
+    "verify:graph": "tsx scripts/verify-graph.ts",
+    "export:cad-catalog": "tsx scripts/export-cad-catalog-to-velxio.ts",
+    "export:cad-models": "tsx scripts/export-cad-models-to-velxio.ts",
+    "export:element-properties": "tsx scripts/export-element-properties-to-velxio.ts",
+    "export:live-surfaces": "tsx scripts/export-live-surfaces-to-velxio.ts",
+    "verify:simulator": "tsx scripts/verify-simulator-link.ts",
+    "verify:contracts": "tsx scripts/verify-contracts.ts",
+    "verify:idea-graph": "tsx scripts/verify-idea-graph.ts",
+    "verify:atlas": "tsx scripts/verify-project-atlas.ts",
+    "verify:quantities": "tsx scripts/verify-quantity-delivery.ts"
+  },
+  "dependencies": {
+    "@aws-sdk/client-bedrock-runtime": "^3.699.0",
+    "@types/three": "^0.185.4",
+    "mongoose": "^8.9.5",
+    "next": "^15.1.6",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "three": "^0.185.1",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.7",
+    "@types/react": "^19.0.7",
+    "@types/react-dom": "^19.0.3",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
+}

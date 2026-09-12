@@ -1,0 +1,39 @@
+# dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# next.js
+.next/
+out/
+# Root-anchored deliberately: a bare `build/` also matches
+# src/app/api/projects/[id]/build/ and silently swallows that API route.
+/build/
+/dist/
+
+# production artifacts
+*.tsbuildinfo
+next-env.d.ts.bak
+
+# env — never commit credentials
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# local telemetry (catalog demand log) — machine-local, never committed
+.wireup/
+
+# misc
+.DS_Store
+.vercel
+.idea/
+.vscode/
+coverage/
