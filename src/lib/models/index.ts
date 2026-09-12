@@ -9,8 +9,9 @@
 export type { EffortLevel, ModelCallUsage, ModelFamily, ModelTransport, RoutedCallOptions, RoutedCallResult } from './types';
 export { ModelRouteError } from './types';
 export type { EffortOp } from './detect';
-export { compareEffort, defaultEffort, detectModelFamily, isAstraModel, isFableModel, parseEffort } from './detect';
+export { compareEffort, defaultEffort, detectModelFamily, isAstraModel, isDirectAstraModelId, isFableModel, parseEffort } from './detect';
 export type { RouteDecision } from './router';
 export { converseRouted, decideRoute } from './router';
-export { attachToolResult, astraDirectAvailable, callAstra, pendingToolCount, registerAsyncTool, updateEffort } from './openai-astra';
+export type { AstraFunctionCall, AstraFunctionOutput, AstraFunctionTool, AstraResponseItem, AstraResponsesPayload, AstraToolTurn, AstraToolTurnRequest } from './openai-astra';
+export { attachToolResult, astraDirectAvailable, callAstra, callAstraToolTurn, parseAstraToolTurn, pendingToolCount, registerAsyncTool, updateEffort } from './openai-astra';
 export { callFable, effortForTurn, fableDirectAvailable, headroomFor } from './anthropic-fable';

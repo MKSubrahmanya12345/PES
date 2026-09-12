@@ -24,6 +24,16 @@ export function isAstraModel(modelId: string | undefined | null): boolean {
   return detectModelFamily(modelId) === 'astra';
 }
 
+/**
+ * A family match is not enough to send an id to the OpenAI endpoint. Bedrock
+ * inference-profile ids also contain `gpt-6-astra`, but are not valid direct
+ * Responses model ids. Keep those on Bedrock even when an OpenAI key exists.
+ */
+export function isDirectAstraModelId(modelId: string | undefined | null): boolean {
+  const id = modelId?.trim().toLowerCase() ?? '';
+  return /^gpt-6-astra(?:[-.][a-z0-9]+)*$/.test(id);
+}
+
 export function isFableModel(modelId: string | undefined | null): boolean {
   return detectModelFamily(modelId) === 'fable';
 }

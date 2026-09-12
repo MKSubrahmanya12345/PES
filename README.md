@@ -66,6 +66,7 @@ Other scripts:
 | `pnpm dev:webpack` | Same dev server on the classic webpack pass. Slower to compile (watcher also covers `external/`) — kept as the fallback for Turbopack-specific problems |
 | `pnpm diagnose:bedrock` | Walks configuration → DNS → TLS → a real Bedrock `Converse` call and stops at the first failure with the exact thing to check. Exits 0 only when a round trip succeeds |
 | `pnpm verify:offline` | Runs the real pipeline, validator and fixer with `*.amazonaws.com` DNS forced to fail, and asserts the project is still complete and the outage is reported honestly. Needs no credentials, no MongoDB and no network |
+| `pnpm verify:agent` | Exercises the hardware agent offline: untrusted tool-argument rejection, catalog-grounded canonical completion, stale-artifact invalidation, and the GPT-6 Astra Responses function-call/continuation contract |
 | `pnpm verify:atlas` | Clones a guitar profile offline, checks stable content addressing, graph IDs, numeric facts, coverage/confidence, Java mappings, a Maven project descriptor and honest unsupported-target behavior |
 | `pnpm verify:llm-codegen` | Proves the AI-first codegen rooting gate offline with canned model plans (good, hallucinated pin, aliased pin, hijacked constant, foreign include, contract breach, provider failure); the happy-path sketch is compiled against the firmware shim. `WIREUP_ENABLE_LLM_CODEGEN=false … --flag-off` also proves the flag disables the stage |
 | `pnpm verify:workbench` | Proves the firmware workbench loop offline: the compile gate, chat turns (applied with revision + diff, answer-only, rooting refusal, compile-fail repair round), manual saves (pin-drift repair, broken-save refusal), and the validator surfacing `firmware_compile_error` |
@@ -103,6 +104,7 @@ hardcoded. `.env.example` documents each variable; the validated shape lives in
 | `BEDROCK_MODEL_ID` | Model for generation (base model id or inference-profile ARN) |
 | `BEDROCK_VALIDATION_MODEL_ID`, `BEDROCK_FIXER_MODEL_ID` | Optional per-role overrides, otherwise the main model is reused |
 | `BEDROCK_MAX_TOKENS`, `BEDROCK_TEMPERATURE`, `BEDROCK_TOP_P`, `BEDROCK_TIMEOUT_MS`, `BEDROCK_MAX_RETRIES` | Inference configuration for the shared client |
+| `OPENAI_API_KEY` | Enables the direct GPT-6 Astra hardware-agent tool loop only when `BEDROCK_MODEL_ID` is a direct Astra id such as `gpt-6-astra`. A Bedrock profile/ARN stays on Bedrock even when this key is set. The direct tool loop uses a stored Responses continuation so tool results retain their original call IDs; one-shot model calls remain non-stored. |
 | `WIREUP_MAX_FIX_ITERATIONS` | Cap on validate → fix → re-validate loops (default 3) |
 | `WIREUP_ENABLE_LLM_FIXER` | Allow the model to propose a changeset when deterministic fixes are not enough |
 | `WIREUP_ENABLE_LLM_VALIDATION` | Run the critical model review in addition to the rule engine |

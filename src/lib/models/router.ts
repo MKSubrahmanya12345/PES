@@ -4,7 +4,7 @@
  * One function, `converseRouted`, that every model operation calls instead
  * of Bedrock directly:
  *
- *   model id is Astra + OPENAI_API_KEY set   → OpenAI Responses (direct)
+ *   direct Astra id + OPENAI_API_KEY set     → OpenAI Responses (direct)
  *   model id is Fable + ANTHROPIC_API_KEY set → Anthropic Messages (direct)
  *   otherwise, Bedrock configured             → Bedrock Converse, with
  *     family-correct inference config (Astra/Fable: NO temperature/top_p —
@@ -23,7 +23,7 @@ import { converse, type BedrockOp } from '@/lib/bedrock/client';
 import { createLogger, describeError } from '@/lib/logging/logger';
 
 import { callFable, fableDirectAvailable } from './anthropic-fable';
-import { detectModelFamily } from './detect';
+import { detectModelFamily, isDirectAstraModelId } from './detect';
 import { astraDirectAvailable, callAstra } from './openai-astra';
 import type { EffortLevel, ModelTransport, RoutedCallOptions, RoutedCallResult } from './types';
 import { ModelRouteError } from './types';
@@ -55,10 +55,17 @@ export interface RouteDecision {
 /** Pure routing decision (no I/O — the verifier asserts on this). */
 export function decideRoute(model: string, keys: { openai: boolean; anthropic: boolean; bedrockModel: boolean }): RouteDecision {
   const family = detectModelFamily(model);
-  if (family === 'astra' && keys.openai) return { transport: 'openai', reason: 'Astra model id + OPENAI_API_KEY — direct Responses API.' };
+  if (family === 'astra' && isDirectAstraModelId(model) && keys.openai) return { transport: 'openai', reason: 'Direct Astra model id + OPENAI_API_KEY — direct Responses API.' };
   if (family === 'fable' && keys.anthropic) return { transport: 'anthropic', reason: 'Fable model id + ANTHROPIC_API_KEY — direct Messages API.' };
   if (keys.bedrockModel) {
-    if (family === 'astra') return { transport: 'bedrock', reason: 'Astra model id via Bedrock Converse (no OPENAI_API_KEY — WebSocket-only primitives unavailable).' };
+    if (family === 'astra') {
+      return {
+        transport: 'bedrock',
+        reason: isDirectAstraModelId(model)
+          ? 'Astra model id via Bedrock Converse (no OPENAI_API_KEY — direct Responses primitives unavailable).'
+          : 'Astra Bedrock profile/id via Bedrock Converse (not a valid direct Responses model id).',
+      };
+    }
     if (family === 'fable') return { transport: 'bedrock', reason: 'Fable model id via Bedrock Converse (no ANTHROPIC_API_KEY — direct-only knobs unavailable).' };
     return { transport: 'bedrock', reason: 'Bedrock Converse.' };
   }
