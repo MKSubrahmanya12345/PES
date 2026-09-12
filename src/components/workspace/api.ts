@@ -64,7 +64,7 @@ export class ApiError extends Error {
   }
 }
 
-async function unwrap<T>(response: Response): Promise<T> {
+export async function unwrap<T>(response: Response): Promise<T> {
   let payload: ApiEnvelope<T> | null = null;
   try {
     payload = (await response.json()) as ApiEnvelope<T>;
@@ -119,6 +119,27 @@ export interface DeviceContract {
   caveats: string[];
 }
 
+export type SurfaceLayout = 'grid' | 'stack' | 'tabs' | 'bare';
+
+export interface SurfaceBlock {
+  id: string;
+  kind: string;
+  title: string;
+  fields: string[];
+  characters: string[];
+  span: number;
+  enabled: boolean;
+  note?: string;
+}
+
+/** The generated site's skeleton: blocks, order, bindings, layout. */
+export interface SurfaceSpec {
+  version: 1;
+  projectName: string;
+  layout: SurfaceLayout;
+  blocks: SurfaceBlock[];
+}
+
 export interface SimulationPayload {
   projectId: string;
   projectName: string;
@@ -151,12 +172,16 @@ export interface SimulationPayload {
     slug: string;
     devPort: number;
     contract: DeviceContract;
+    /** The skeleton spec the generated site renders from. */
+    surface: SurfaceSpec;
     files: { path: string; bytes: number }[];
     findings: SoftwareFinding[];
     passed: boolean;
     notes: string[];
     generatedAt: string;
     zipUrl: string;
+    /** POST { cwd } — write the site into a folder so the terminal can run it. */
+    writeUrl: string;
   } | null;
   blocked: { velxio: string | null; software: string | null };
 }

@@ -28,6 +28,16 @@ export interface HubValue {
   /** "Show technical detail" toggle — reveals provenance, ids, raw JSON, etc. */
   details: boolean;
   toggleDetails: () => void;
+  /**
+   * The terminal dock: whether it is open, and the gate it watches. Any tab can
+   * open it (the /simulation page's Website half does), and it opens itself once
+   * `checks.passed` flips true.
+   */
+  dockOpen: boolean;
+  openDock: () => void;
+  closeDock: () => void;
+  toggleDock: () => void;
+  checks: { passed: boolean; label: string; detail: string };
 }
 
 export const HubContext = createContext<HubValue | null>(null);
