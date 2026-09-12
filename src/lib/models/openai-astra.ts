@@ -69,7 +69,7 @@ export interface AstraFunctionOutput {
 export interface AstraToolTurnRequest {
   model: string;
   system: string[];
-  /** Required for the first turn; later turns continue `previousResponseId`. */
+  /** Required for the first turn; may also send bounded repair feedback on a later continuation. */
   userText?: string;
   previousResponseId?: string;
   tools: AstraFunctionTool[];
@@ -224,17 +224,22 @@ export function parseAstraToolTurn(payload: AstraResponsesPayload): AstraToolTur
 export async function callAstraToolTurn(request: AstraToolTurnRequest): Promise<AstraToolTurn> {
   const key = apiKey();
   if (!key) throw new Error('OPENAI_API_KEY is not set — Astra direct tool calls are unavailable (use Bedrock transport).');
-  if (!request.previousResponseId && !request.userText?.trim()) {
+  const hasToolOutputs = (request.toolOutputs?.length ?? 0) > 0;
+  const hasUserText = Boolean(request.userText?.trim());
+  if (!request.previousResponseId && !hasUserText) {
     throw new Error('An Astra tool session needs userText on its first turn.');
   }
-  if (request.previousResponseId && (request.toolOutputs?.length ?? 0) === 0) {
-    throw new Error('An Astra tool continuation needs at least one function_call_output.');
+  if (request.previousResponseId && !hasToolOutputs && !hasUserText) {
+    throw new Error('An Astra tool continuation needs function_call_output or bounded user feedback.');
+  }
+  if (hasToolOutputs && hasUserText) {
+    throw new Error('An Astra tool continuation accepts either function_call_output or user feedback, not both.');
   }
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), request.timeoutMs ?? 120_000);
   try {
-    const input = request.previousResponseId
+    const input = hasToolOutputs
       ? (request.toolOutputs ?? []).map((result) => ({
           type: 'function_call_output' as const,
           call_id: result.callId,

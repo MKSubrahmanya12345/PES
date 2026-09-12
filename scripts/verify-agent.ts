@@ -149,7 +149,9 @@ async function main(): Promise<void> {
               id: 'resp_direct_1',
               output: [{ type: 'function_call', call_id: 'call_direct_1', name: 'search_components', arguments: '{"query":"esp32"}' }],
             }
-          : { id: 'resp_direct_2', output_text: 'Hardware plan complete.', output: [] },
+          : directRound === 2
+            ? { id: 'resp_direct_2', output_text: 'Hardware plan complete.', output: [] }
+            : { id: 'resp_direct_3', output_text: 'Repair plan requested.', output: [] },
       ),
       { status: 200, headers: { 'Content-Type': 'application/json' } },
     );
@@ -170,8 +172,17 @@ async function main(): Promise<void> {
       toolOutputs: [{ callId: first.toolCalls[0]!.callId, output: '{"success":true,"message":"Found ESP32"}' }],
       effort: 'high',
     });
+    const feedback = await callAstraToolTurn({
+      model: 'gpt-6-astra',
+      system: ['Agent system instruction'],
+      previousResponseId: second.responseId,
+      userText: 'The generated sketch failed compile validation. Use repair_firmware with these diagnostics.',
+      tools: [{ name: 'repair_firmware', description: 'repair', parameters: { type: 'object', properties: { plan: { type: 'object' } }, required: ['plan'] } }],
+      effort: 'high',
+    });
     const firstRequest = outbound[0] ?? {};
     const secondRequest = outbound[1] ?? {};
+    const feedbackRequest = outbound[2] ?? {};
     check('direct Astra turn uses function tools, effort, and no legacy sampling parameters',
       firstRequest.store === true &&
       firstRequest.parallel_tool_calls === false &&
@@ -187,6 +198,15 @@ async function main(): Promise<void> {
       Array.isArray(secondRequest.input) &&
       (secondRequest.input as { type?: unknown; call_id?: unknown }[])[0]?.type === 'function_call_output' &&
       (secondRequest.input as { type?: unknown; call_id?: unknown }[])[0]?.call_id === 'call_direct_1',
+    );
+    check('direct Astra accepts bounded compiler feedback on the existing response chain',
+      feedback.responseId === 'resp_direct_3' &&
+      feedbackRequest.previous_response_id === 'resp_direct_2' &&
+      Array.isArray(feedbackRequest.input) &&
+      (feedbackRequest.input as { role?: unknown; content?: unknown }[])[0]?.role === 'user' &&
+      String((feedbackRequest.input as { role?: unknown; content?: unknown }[])[0]?.content).includes('failed compile validation') &&
+      Array.isArray(feedbackRequest.tools) &&
+      (feedbackRequest.tools as { name?: unknown }[])[0]?.name === 'repair_firmware',
     );
   } finally {
     globalThis.fetch = originalFetch;

@@ -44,6 +44,7 @@ import type {
   AgentTool,
   AgentToolContext,
   AgentToolResult,
+  AgentToolSchema,
 } from './types';
 import { ALL_AGENT_TOOLS, synchroniseHardwarePlan } from './tools';
 
@@ -168,9 +169,14 @@ Rules:
 - Select only catalog components returned by search_components. Never invent a
   part, pin, voltage, connection, library, or test result.
 - Work in this order: search/select → plan_hardware → check_compatibility →
-  assign_and_verify_pins → route_wiring → generate_firmware → build_artifacts.
-- If a check fails, adjust the part selection, then call plan_hardware again;
-  it invalidates stale downstream work by design.
+  assign_and_verify_pins → route_wiring → generate_firmware → (repair_firmware
+  when compile feedback requires it) → build_artifacts.
+- If a hardware check fails, adjust the part selection, then call plan_hardware
+  again; it invalidates stale downstream work by design.
+- If generate_firmware reports compiler errors, use its diagnostics and bounded
+  source preview to call repair_firmware with a behavioural plan. That tool
+  re-roots pins/includes/buses and recompiles it; never claim success until the
+  repair passes. Do not call build_artifacts on a failed compile.
 - Tool calls mutate shared engineering state. Issue one action at a time and
   inspect its result before making another call.
 - Keep narrative to a short operational status. Do not reveal private
@@ -277,12 +283,18 @@ async function executeToolCall(
   call: AgentModelToolCall,
   context: AgentToolContext,
   logStep: (record: AgentStepRecord) => void,
+  allowedToolNames?: ReadonlySet<string>,
 ): Promise<AgentModelToolOutput> {
-  const tool = ALL_AGENT_TOOLS[call.name];
+  const tool = !allowedToolNames || allowedToolNames.has(call.name) ? ALL_AGENT_TOOLS[call.name] : undefined;
   let result: AgentToolResult;
 
   if (!tool) {
-    result = { success: false, message: `Unknown tool "${call.name}". Use only a listed tool.` };
+    result = {
+      success: false,
+      message: allowedToolNames
+        ? `Tool "${call.name}" is unavailable in this restricted repair pass.`
+        : `Unknown tool "${call.name}". Use only a listed tool.`,
+    };
   } else {
     const validated = validateToolArguments(tool, call.arguments);
     if (!validated.ok) {
@@ -327,6 +339,9 @@ async function runModelToolLoop(input: {
   context: AgentToolContext;
   events: AgentEventLog;
   logStep: (record: AgentStepRecord) => void;
+  /** A repair pass exposes only the code-repair tool, never the full board. */
+  tools?: AgentToolSchema[];
+  allowedToolNames?: ReadonlySet<string>;
 }): Promise<void> {
   let outputs: AgentModelToolOutput[] | undefined;
   let callCount = 0;
@@ -336,7 +351,7 @@ async function runModelToolLoop(input: {
       turn,
       systemPrompt: input.system,
       ...(turn === 0 ? { userPrompt: input.user } : {}),
-      tools: toolSpecs(),
+      tools: input.tools ?? toolSpecs(),
       ...(outputs ? { toolOutputs: outputs } : {}),
     });
 
@@ -372,7 +387,7 @@ async function runModelToolLoop(input: {
         registerAsyncTool({ callId: call.id, name: call.name, arguments: rawArguments, issuedAt: nowIso() });
       }
       try {
-        outputs.push(await executeToolCall(call, input.context, input.logStep));
+        outputs.push(await executeToolCall(call, input.context, input.logStep, input.allowedToolNames));
       } finally {
         // Removing the pending entry is just as important as adding it: a
         // failed local tool must not leak a stale call into a later project.
@@ -425,6 +440,11 @@ function createBedrockDriver(model: string): AgentModelDriver {
     next: async (input) => {
       if (messages.length === 0) {
         if (!input.userPrompt) throw new Error('Bedrock agent session needs userPrompt on its first turn.');
+        messages.push({ role: 'user', content: [{ text: input.userPrompt }] });
+      } else if (input.userPrompt) {
+        // A compile failure after canonical generation is actionable feedback,
+        // not a tool result. Preserve the same Bedrock conversation and let
+        // the model invoke the bounded repair tool with those diagnostics.
         messages.push({ role: 'user', content: [{ text: input.userPrompt }] });
       } else {
         messages.push({
@@ -510,6 +530,16 @@ function canonicalResult(tool: string, result: AgentToolResult, logStep: (record
   });
 }
 
+/**
+ * The compile result is returned verbatim as a bounded tool observation, then
+ * sent once more as an explicit user turn if deterministic generation happens
+ * after the model's first loop. This lets the same provider repair what it
+ * just generated instead of leaving a later validation stage to rediscover it.
+ */
+function firmwareRepairFeedback(result: AgentToolResult): string {
+  return `The canonical firmware generation failed its compile gate. Repair only the firmware by calling repair_firmware. Do not change components, pins, wiring, libraries, or the project brief. The tool result below contains the compiler diagnostics and a bounded source preview. Submit a complete behavioural plan (constants, globals, setup body, loop body, helper functions), not raw sketch text.\n\n${serialiseToolResult(result)}`;
+}
+
 export async function runHardwareAgent(input: AgentRunInput): Promise<AgentRunOutput> {
   const { prompt, projectName, requirements, analysis, catalog, events, onStep } = input;
   const blackboard: AgentBlackboard = {
@@ -528,6 +558,7 @@ export async function runHardwareAgent(input: AgentRunInput): Promise<AgentRunOu
     softwarePlan: null,
     code: null,
     firmwareCompile: null,
+    firmwareRepairAttempts: 0,
     diagram: null,
     libraries: null,
     instructions: null,
@@ -657,14 +688,54 @@ export async function runHardwareAgent(input: AgentRunInput): Promise<AgentRunOu
   wireHandle.complete(`Routed ${blackboard.wiring?.connections.length ?? 0} circuit connection(s).`);
 
   const firmwareHandle = events.start('code_generation_started', 'Generating firmware from the grounded pin map...', { stage: 'code' });
-  const firmwareResult = await ALL_AGENT_TOOLS.generate_firmware.execute({}, toolContext);
+  const existingFirmware = Boolean(blackboard.code?.files.some((file) => file.path === blackboard.code?.entryPoint)) &&
+    (blackboard.firmwareCompile?.status === 'passed' || blackboard.firmwareCompile?.status === 'skipped');
+  // A model may already have completed a diagnostics-informed repair during
+  // its initial tool loop. Do not regenerate over that verified source; the
+  // canonical hardware synchronisation above would already have invalidated it
+  // if selections/topology had changed.
+  const firmwareResult = existingFirmware
+    ? {
+        success: true,
+        message: `Reusing current firmware after compile check ${blackboard.firmwareCompile?.status}.`,
+        data: { compile: blackboard.firmwareCompile },
+      }
+    : await ALL_AGENT_TOOLS.generate_firmware.execute({}, toolContext);
   canonicalResult('generate_firmware', firmwareResult, logStep);
   if (!firmwareResult.success) {
-    firmwareHandle.fail(`Firmware alert: ${firmwareResult.message}`);
-    blackboard.notes.push(`Firmware generation blocked artifact generation: ${firmwareResult.message}`);
-    return { blackboard, steps, notes: blackboard.notes };
+    if (driver && blackboard.firmwareCompile?.status === 'failed') {
+      events.emit('info', 'Firmware compile diagnostics are being returned to the model for a bounded rooted repair pass.', {
+        stage: 'code',
+        metadata: { model: driver.model, transport: driver.transport, maxRepairAttempts: 2 },
+      });
+      try {
+        await runModelToolLoop({
+          driver,
+          system: systemPrompt(),
+          user: firmwareRepairFeedback(firmwareResult),
+          context: toolContext,
+          events,
+          logStep,
+          tools: [ALL_AGENT_TOOLS.repair_firmware.schema],
+          allowedToolNames: new Set(['repair_firmware']),
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        blackboard.notes.push(`Firmware repair feedback loop was unavailable (${message}).`);
+        logger.warn({ error, model: driver.model, transport: driver.transport }, 'agent firmware repair feedback loop interrupted');
+      }
+    }
+
+    if (blackboard.firmwareCompile?.status !== 'passed') {
+      const detail = blackboard.firmwareCompile?.diagnostics[0] ?? firmwareResult.message;
+      firmwareHandle.fail(`Firmware alert: ${detail}`);
+      blackboard.notes.push(`Firmware generation blocked artifact generation: ${detail}`);
+      return { blackboard, steps, notes: blackboard.notes };
+    }
+    firmwareHandle.complete(`Firmware repaired from compiler feedback: ${blackboard.code?.files.length ?? 0} file(s).`);
+  } else {
+    firmwareHandle.complete(`Firmware synthesized: ${blackboard.code?.files.length ?? 0} file(s).`);
   }
-  firmwareHandle.complete(`Firmware synthesized: ${blackboard.code?.files.length ?? 0} file(s).`);
 
   const artifactHandle = events.start('instructions_generation_started', 'Building simulation diagram, libraries, and instructions...', { stage: 'instructions' });
   const artifactResult = await ALL_AGENT_TOOLS.build_artifacts.execute({}, toolContext);

@@ -43,6 +43,8 @@ export interface AgentBlackboard {
   code: CodeArtifact | null;
   /** Compile-gate verdict for the current `code` artifact, if one exists. */
   firmwareCompile: AgentFirmwareCompileStatus | null;
+  /** Bounded diagnostics-informed repairs for the current circuit topology. */
+  firmwareRepairAttempts: number;
   diagram: Diagram | null;
   libraries: LibrariesArtifact | null;
   instructions: InstructionsArtifact | null;
@@ -93,7 +95,7 @@ export interface AgentModelToolOutput {
 export interface AgentModelTurnInput {
   turn: number;
   systemPrompt: string;
-  /** Present only on the first turn. */
+  /** Initial user request, or bounded diagnostics feedback for a repair pass. */
   userPrompt?: string;
   tools: AgentToolSchema[];
   toolOutputs?: AgentModelToolOutput[];
