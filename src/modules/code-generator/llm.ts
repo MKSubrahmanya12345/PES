@@ -126,6 +126,24 @@ function normalizePlan(raw: z.infer<typeof SketchPlanSchema>): LlmSketchPlan {
   };
 }
 
+/**
+ * Validate an externally supplied behavioural plan before it reaches the
+ * rooting gate. The hardware agent uses this after returning compiler
+ * diagnostics to its model, so function-call arguments get the same contract
+ * as a dedicated firmware-authoring model response.
+ */
+export function parseLlmSketchPlan(value: unknown): { ok: true; plan: LlmSketchPlan } | { ok: false; error: string } {
+  const parsed = SketchPlanSchema.safeParse(value);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    return {
+      ok: false,
+      error: `firmware plan did not match the required schema${issue ? ` (${issue.path.join('.') || 'root'}: ${issue.message})` : ''}`,
+    };
+  }
+  return { ok: true, plan: normalizePlan(parsed.data) };
+}
+
 function functionNameFromDefinition(definition: string): string {
   const match = /\b(?:[A-Za-z_][A-Za-z0-9_:<>*&\s]*\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\(/.exec(definition);
   return match?.[1] ?? 'modelHelper';

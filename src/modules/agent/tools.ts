@@ -6,18 +6,25 @@
  * generate firmware, and run design rule checks.
  */
 
-import type { AgentTool, AgentToolContext } from './types';
+import type { AgentFirmwareCompileStatus, AgentTool, AgentToolContext } from './types';
 import type { ComponentDefinition, ComponentInstance, ComponentPin, ComponentRole, ComponentSelection, PowerBudget } from '@/types/component';
-import type { HardwarePlan, SoftwarePlan } from '@/types/project';
+import type { CodeArtifact, HardwarePlan, SoftwarePlan } from '@/types/project';
 import { checkCompatibility } from '@/modules/hardware-planner/compatibility';
+import { planHardware } from '@/modules/hardware-planner';
 import { planPins } from '@/modules/pin-planner';
 import { planWiring } from '@/modules/wiring-planner';
 import { planSoftware } from '@/modules/software-planner';
 import { generateCode } from '@/modules/code-generator';
+import { parseLlmSketchPlan } from '@/modules/code-generator/llm';
+import { i2cBusInitLines } from '@/modules/code-generator/managed-blocks';
+import { rootLlmSketch, type RootingContext } from '@/modules/code-generator/rooting';
 import { generateLibraries } from '@/modules/libraries-generator';
 import { generateDiagram } from '@/modules/diagram-generator';
 import { generateInstructions } from '@/modules/instructions-generator';
+import { compileFirmware, formatDiagnostic, type CompileResult } from '@/modules/firmware-compiler';
 import { createId } from '@/lib/validation/ids';
+
+const MAX_FIRMWARE_REPAIR_ATTEMPTS = 2;
 
 const VALID_ROLES = new Set<ComponentRole>([
   'controller',
@@ -41,6 +48,229 @@ function toRole(roleCandidate: string, category: string): ComponentRole {
   if (category === 'display') return 'display';
   if (category === 'power') return 'power';
   return 'other';
+}
+
+function instancesFor(definition: ComponentDefinition, quantity: number): ComponentInstance[] {
+  return Array.from({ length: quantity }, (_, index) => ({
+    instanceId: quantity > 1 ? `${definition.id}-${index + 1}` : `${definition.id}-1`,
+    componentId: definition.id,
+    name: definition.name,
+    index: index + 1,
+    label: quantity > 1 ? `${definition.name} #${index + 1}` : definition.name,
+    category: definition.category,
+  }));
+}
+
+/**
+ * A changed circuit makes every derived artifact suspect. Clearing all of them
+ * is safer than letting a model backtrack from one part while keeping the old
+ * pins, wires, sketch, or diagram. The deterministic runner rebuilds them.
+ */
+function invalidateCircuitDerivatives(blackboard: AgentToolContext['blackboard']): void {
+  blackboard.hardwarePlan = null;
+  blackboard.pinAssignments = [];
+  blackboard.serialLinks = [];
+  blackboard.i2cBuses = [];
+  blackboard.wiring = null;
+  blackboard.softwarePlan = null;
+  blackboard.code = null;
+  blackboard.firmwareCompile = null;
+  blackboard.firmwareRepairAttempts = 0;
+  blackboard.diagram = null;
+  blackboard.libraries = null;
+  blackboard.instructions = null;
+  blackboard.drcIssues = [];
+}
+
+interface FirmwareCompileGateResult {
+  status: AgentFirmwareCompileStatus['status'];
+  ok: boolean;
+  ran: boolean;
+  compiler?: string;
+  durationMs: number;
+  errors: string[];
+  warnings: string[];
+  skippedReason?: string;
+}
+
+/**
+ * The agent's code-producing tools share one compile gate. It records the
+ * verdict with the exact source that was checked, preserving failures for the
+ * next model turn and the pipeline fixer instead of hiding them behind a
+ * generated-files success message.
+ */
+function compileAndRecordFirmware(context: AgentToolContext, code: CodeArtifact): FirmwareCompileGateResult {
+  let compile: CompileResult;
+  try {
+    compile = compileFirmware({ files: code.files, entryPoint: code.entryPoint });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    code.notes.push(`Firmware compile validation could not run: ${detail}`);
+    context.blackboard.code = code;
+    context.blackboard.firmwareCompile = {
+      status: 'unavailable',
+      diagnostics: [detail],
+      skippedReason: detail,
+    };
+    context.blackboard.drcIssues = [`Firmware compile validation could not run: ${detail}`];
+    return {
+      status: 'unavailable',
+      ok: false,
+      ran: false,
+      durationMs: 0,
+      errors: [detail],
+      warnings: [],
+      skippedReason: detail,
+    };
+  }
+
+  const errors = compile.diagnostics
+    .filter((diagnostic) => diagnostic.severity === 'error')
+    .map(formatDiagnostic);
+  const warnings = compile.diagnostics
+    .filter((diagnostic) => diagnostic.severity === 'warning')
+    .map(formatDiagnostic);
+  const status: AgentFirmwareCompileStatus['status'] = !compile.ran ? 'skipped' : compile.ok ? 'passed' : 'failed';
+  const skippedReason = compile.skippedReason ?? 'compiler unavailable';
+
+  if (!compile.ran) {
+    code.notes.push(`Firmware compile check skipped: ${skippedReason}`);
+  } else if (!compile.ok) {
+    const details = errors.length > 0 ? errors : [compile.skippedReason ?? 'The compiler exited non-zero without a parseable diagnostic.'];
+    code.notes.push(`Firmware compile check failed: ${details.join(' | ')}`);
+    context.blackboard.drcIssues = details;
+  } else {
+    code.notes.push(`Firmware compile check passed with ${compile.compiler ?? 'host compiler'} in ${compile.durationMs} ms.`);
+    context.blackboard.drcIssues = [];
+  }
+
+  context.blackboard.code = code;
+  context.blackboard.firmwareCompile = {
+    status,
+    ...(compile.compiler ? { compiler: compile.compiler } : {}),
+    durationMs: compile.durationMs,
+    diagnostics: [...errors, ...warnings],
+    ...(!compile.ran ? { skippedReason } : {}),
+  };
+
+  return {
+    status,
+    ok: compile.ok,
+    ran: compile.ran,
+    ...(compile.compiler ? { compiler: compile.compiler } : {}),
+    durationMs: compile.durationMs,
+    errors,
+    warnings,
+    ...(!compile.ran ? { skippedReason } : {}),
+  };
+}
+
+function compileObservation(result: FirmwareCompileGateResult): Record<string, unknown> {
+  return {
+    status: result.status,
+    ...(result.compiler ? { compiler: result.compiler } : {}),
+    durationMs: result.durationMs,
+    errors: result.errors,
+    warnings: result.warnings,
+    ...(!result.ran ? { skippedReason: result.skippedReason ?? 'compiler unavailable' } : {}),
+  };
+}
+
+/** Keep failure feedback small enough to be returned through a model tool turn. */
+function repairContext(code: CodeArtifact): Record<string, unknown> {
+  const entry = code.files.find((file) => file.path === code.entryPoint);
+  const source = entry?.content ?? '';
+  const max = 6_000;
+  return {
+    entryPoint: code.entryPoint,
+    source: source.slice(0, max),
+    ...(source.length > max ? { sourceTruncated: true } : {}),
+  };
+}
+
+function firmwareRootingContext(context: AgentToolContext): RootingContext | null {
+  const { selections, workingCatalog: catalog, softwarePlan, pinAssignments, i2cBuses, projectName, requirements } = context.blackboard;
+  if (!softwarePlan) return null;
+  const controller = selections.find((selection) => {
+    const component = catalog.find((candidate) => candidate.id === selection.componentId);
+    return component?.category === 'microcontroller';
+  });
+  const controllerName = catalog.find((component) => component.id === controller?.componentId)?.name ?? 'Arduino';
+  return {
+    projectName,
+    projectSummary: requirements.summary,
+    controllerName,
+    assignments: pinAssignments,
+    libraries: softwarePlan.libraries,
+    platformIsEsp32: /esp32/i.test(controllerName),
+    ...(i2cBuses.length > 0
+      ? { i2cInitLines: i2cBusInitLines({ assignments: pinAssignments, buses: i2cBuses, linkIdentifier: 'Serial' }) }
+      : {}),
+  };
+}
+
+function sameSelectionTopology(a: ComponentSelection[], b: ComponentSelection[]): boolean {
+  const signature = (selection: ComponentSelection) => `${selection.componentId}:${selection.quantity}:${selection.role}`;
+  return a.length === b.length && a.map(signature).sort().join('|') === b.map(signature).sort().join('|');
+}
+
+function plannerInputFromSelections(selections: ComponentSelection[]): unknown[] {
+  return selections.map((selection) => ({
+    componentId: selection.componentId,
+    quantity: selection.quantity,
+    role: selection.role,
+    reason: selection.reason,
+    required: selection.required,
+  }));
+}
+
+/**
+ * Canonicalise model-selected parts through the hardware planner. This keeps
+ * the catalog, defaults, quantities, power budget, and compatibility report in
+ * agreement before any downstream tool commits a pin or wire.
+ */
+export async function synchroniseHardwarePlan(context: AgentToolContext): Promise<{
+  changed: boolean;
+  provisional: string[];
+  notes: string[];
+}> {
+  const blackboard = context.blackboard;
+  const previous = blackboard.selections;
+  const hadPlan = blackboard.hardwarePlan !== null;
+  const planned = await planHardware(
+    {
+      requirements: blackboard.requirements,
+      analysis: blackboard.analysis,
+      modelComponents: plannerInputFromSelections(previous),
+      catalog: blackboard.workingCatalog,
+    },
+    context.events,
+  );
+
+  const knownIds = new Set(blackboard.workingCatalog.map((component) => component.id));
+  for (const provisional of planned.provisional) {
+    if (!knownIds.has(provisional.id)) {
+      blackboard.workingCatalog.push(provisional);
+      knownIds.add(provisional.id);
+    }
+  }
+
+  const changed = !hadPlan || !sameSelectionTopology(previous, planned.selections);
+  blackboard.selections = planned.selections;
+  blackboard.hardwarePlan = planned.plan;
+  for (const note of planned.notes) {
+    if (!blackboard.notes.includes(note)) blackboard.notes.push(note);
+  }
+
+  if (changed) {
+    // Preserve the freshly calculated plan while discarding every artifact
+    // derived from the previous (or plan-less) circuit.
+    const plan = blackboard.hardwarePlan;
+    invalidateCircuitDerivatives(blackboard);
+    blackboard.hardwarePlan = plan;
+  }
+
+  return { changed, provisional: planned.provisional.map((component) => component.id), notes: planned.notes };
 }
 
 /**
@@ -121,7 +351,8 @@ export const selectComponentTool: AgentTool = {
   execute: (args, context) => {
     const componentId = String(args.componentId).trim();
     const roleRaw = String(args.role || 'Hardware component').trim();
-    const qty = Math.max(1, Math.min(10, Number(args.quantity) || 1));
+    const requestedQuantity = Number(args.quantity);
+    const qty = Number.isFinite(requestedQuantity) ? Math.max(1, Math.min(10, Math.round(requestedQuantity))) : 1;
     const def = context.blackboard.workingCatalog.find((c) => c.id === componentId);
 
     if (!def) {
@@ -133,12 +364,21 @@ export const selectComponentTool: AgentTool = {
 
     const role = toRole(roleRaw, def.category);
 
-    // Check if already selected
+    // Check if already selected. Updating quantity must rebuild concrete
+    // instances too; leaving the old instance list behind creates pins and
+    // wires for parts that are no longer in the BOM.
     const existing = context.blackboard.selections.find((s) => s.componentId === componentId);
     if (existing) {
+      const changed = existing.quantity !== qty || existing.role !== role || existing.reason !== roleRaw;
       existing.quantity = qty;
       existing.role = role;
       existing.reason = roleRaw;
+      existing.instances = instancesFor(def, qty);
+      if (changed) invalidateCircuitDerivatives(context.blackboard);
+      context.events.emit('component_selected', `Updated ${def.name} (${qty}x, ${role})`, {
+        stage: 'hardware',
+        metadata: { componentId: def.id, quantity: qty, role, updated: true },
+      });
       return {
         success: true,
         message: `Updated existing component "${def.name}" quantity to ${qty}.`,
@@ -146,14 +386,7 @@ export const selectComponentTool: AgentTool = {
       };
     }
 
-    const instances: ComponentInstance[] = Array.from({ length: qty }, (_, i) => ({
-      instanceId: qty > 1 ? `${componentId}-${i + 1}` : `${componentId}-1`,
-      componentId: def.id,
-      name: def.name,
-      index: i + 1,
-      label: qty > 1 ? `${def.name} #${i + 1}` : def.name,
-      category: def.category,
-    }));
+    const instances = instancesFor(def, qty);
 
     const selection: ComponentSelection = {
       id: createId('sel'),
@@ -169,6 +402,7 @@ export const selectComponentTool: AgentTool = {
     };
 
     context.blackboard.selections.push(selection);
+    invalidateCircuitDerivatives(context.blackboard);
     context.events.emit('component_selected', `Selected ${def.name} (${role})`, {
       stage: 'hardware',
       metadata: { componentId: def.id, quantity: qty, role },
@@ -210,9 +444,7 @@ export const deselectComponentTool: AgentTool = {
       return { success: false, message: `Component "${componentId}" is not currently in the circuit.` };
     }
     context.blackboard.selections.splice(idx, 1);
-    // Invalidate downstream dependent plans so they will be recalculated
-    context.blackboard.pinAssignments = [];
-    context.blackboard.wiring = null;
+    invalidateCircuitDerivatives(context.blackboard);
 
     context.events.emit('info', `Removed ${componentId} from the circuit for replacement.`, {
       stage: 'hardware',
@@ -227,7 +459,37 @@ export const deselectComponentTool: AgentTool = {
 };
 
 /**
- * Tool 4: check_compatibility
+ * Tool 4: plan_hardware
+ * Make the planner's catalog-grounded selections and power budget canonical.
+ */
+export const planHardwareTool: AgentTool = {
+  schema: {
+    name: 'plan_hardware',
+    description: 'Canonicalize selected catalog components, add engineering-required supporting parts, and calculate the real power and compatibility plan before assigning pins.',
+    parameters: { type: 'object', properties: {} },
+  },
+  execute: async (_args, context) => {
+    const result = await synchroniseHardwarePlan(context);
+    const plan = context.blackboard.hardwarePlan;
+    return {
+      success: Boolean(plan),
+      message: `Hardware plan is grounded on ${context.blackboard.selections.length} part selection(s)${result.changed ? '; downstream artifacts were reset for the revised circuit.' : '.'}`,
+      data: {
+        parts: context.blackboard.selections.map((selection) => ({
+          componentId: selection.componentId,
+          quantity: selection.quantity,
+          role: selection.role,
+        })),
+        powerAdequate: plan?.power.adequate ?? false,
+        risks: plan?.risks ?? [],
+        provisional: result.provisional,
+      },
+    };
+  },
+};
+
+/**
+ * Tool 5: check_compatibility
  * Check electrical and voltage compatibility between selected parts and the controller.
  */
 export const checkCompatibilityTool: AgentTool = {
@@ -280,7 +542,7 @@ export const checkCompatibilityTool: AgentTool = {
 };
 
 /**
- * Tool 5: assign_and_verify_pins
+ * Tool 6: assign_and_verify_pins
  * Assign MCU pins to all peripherals and check for shortages/conflicts.
  */
 export const assignPinsTool: AgentTool = {
@@ -350,7 +612,7 @@ export const assignPinsTool: AgentTool = {
 };
 
 /**
- * Tool 6: route_wiring
+ * Tool 7: route_wiring
  * Route the power rails and signal connections for the design.
  */
 export const routeWiringTool: AgentTool = {
@@ -406,13 +668,13 @@ export const routeWiringTool: AgentTool = {
 };
 
 /**
- * Tool 7: generate_firmware
- * Synthesize verified sketch firmware and compile-check against the assigned pin map.
+ * Tool 8: generate_firmware
+ * Generate sketch firmware and record its host compile-gate verdict against the assigned pin map.
  */
 export const generateFirmwareTool: AgentTool = {
   schema: {
     name: 'generate_firmware',
-    description: 'Author the sketch.ino embedded firmware based on the assigned pins and verified components.',
+    description: 'Author the sketch.ino embedded firmware from the assigned pins and run the host compile gate.',
     parameters: {
       type: 'object',
       properties: {},
@@ -462,21 +724,172 @@ export const generateFirmwareTool: AgentTool = {
       events: context.events,
     });
 
-    context.blackboard.code = code;
+    /*
+     * Code presence is not a firmware verdict. A failed result includes the
+     * compiler feedback and a bounded source preview for the next agent turn,
+     * which can submit a rooted repair rather than merely reporting the error.
+     */
+    const compile = compileAndRecordFirmware(context, code);
+    if (!compile.ok) {
+      return {
+        success: false,
+        message: `Firmware failed the compile gate: ${(compile.errors[0] ?? compile.skippedReason ?? 'compiler exited non-zero').slice(0, 300)}`,
+        error: compile.status === 'unavailable' ? 'firmware_validation_unavailable' : 'firmware_compile_error',
+        data: {
+          files: code.files.map((file) => file.path),
+          compile: compileObservation(compile),
+          repair: repairContext(code),
+        },
+      };
+    }
 
     return {
       success: code.files.length > 0,
-      message: `Firmware generated: ${code.files.length} file(s).`,
+      message: `Firmware generated: ${code.files.length} file(s). Compile check ${compile.status}${compile.ran ? ` (${compile.compiler ?? 'host compiler'}, ${compile.warnings.length} warning(s)).` : `: ${compile.skippedReason ?? 'compiler unavailable'}`}`,
       data: {
-        files: code.files.map((f) => f.path),
+        files: code.files.map((file) => file.path),
         notes: code.notes,
+        compile: compileObservation(compile),
       },
     };
   },
 };
 
 /**
- * Tool 8: build_artifacts
+ * Tool 9: repair_firmware
+ * Feed compiler diagnostics back into a bounded, rooted repair attempt. The
+ * model can revise behavioural sections only; the rooter rebuilds all
+ * hardware-owned includes, pins, and I2C initialisation before compiling.
+ */
+export const repairFirmwareTool: AgentTool = {
+  schema: {
+    name: 'repair_firmware',
+    description: 'Repair a failed sketch from the compiler diagnostics. Submit a structured behavioural plan; Wireup preserves the assigned pins, libraries, and buses, then recompiles it.',
+    parameters: {
+      type: 'object',
+      properties: {
+        plan: {
+          type: 'object',
+          description: 'Firmware plan object: constants array, globals string, setup string (body only), loop string (body only), functions array of {name, definition}, and notes array. Do not include #include directives, pin declarations, or void setup/loop wrappers.',
+        },
+      },
+      required: ['plan'],
+    },
+  },
+  execute: (args, context) => {
+    const { code, firmwareCompile, firmwareRepairAttempts } = context.blackboard;
+    if (!code || !firmwareCompile) {
+      return { success: false, message: 'Generate and compile firmware before requesting a repair.' };
+    }
+    if (firmwareCompile.status !== 'failed') {
+      return {
+        success: false,
+        message: firmwareCompile.status === 'unavailable'
+          ? 'Firmware repair is unavailable because the compile gate did not run.'
+          : `Firmware repair is not needed: compile status is ${firmwareCompile.status}.`,
+      };
+    }
+    if (firmwareRepairAttempts >= MAX_FIRMWARE_REPAIR_ATTEMPTS) {
+      return {
+        success: false,
+        message: `Firmware repair limit (${MAX_FIRMWARE_REPAIR_ATTEMPTS}) reached. The last compiler diagnostics remain attached for the pipeline fixer.`,
+        error: 'firmware_repair_limit',
+        data: { compile: compileObservation({
+          status: firmwareCompile.status,
+          ok: false,
+          ran: true,
+          ...(firmwareCompile.compiler ? { compiler: firmwareCompile.compiler } : {}),
+          durationMs: firmwareCompile.durationMs ?? 0,
+          errors: firmwareCompile.diagnostics,
+          warnings: [],
+        }) },
+      };
+    }
+
+    const parsed = parseLlmSketchPlan(args.plan);
+    if (!parsed.ok) {
+      return {
+        success: false,
+        message: `Rejected firmware repair: ${parsed.error}.`,
+        error: 'invalid_firmware_plan',
+      };
+    }
+
+    const rooting = firmwareRootingContext(context);
+    if (!rooting) {
+      return { success: false, message: 'Cannot repair firmware: the software and pin plans are missing.' };
+    }
+
+    context.blackboard.firmwareRepairAttempts += 1;
+    const rooted = rootLlmSketch(parsed.plan, rooting);
+    if (rooted.verdict !== 'rooted') {
+      return {
+        success: false,
+        message: `Rejected firmware repair by the grounding gate: ${rooted.issues[0] ?? 'invalid behavioural plan'}.`,
+        error: 'firmware_repair_rejected',
+        data: {
+          issues: rooted.issues,
+          warnings: rooted.warnings,
+          repairs: rooted.repairs,
+          attemptsRemaining: MAX_FIRMWARE_REPAIR_ATTEMPTS - context.blackboard.firmwareRepairAttempts,
+        },
+      };
+    }
+
+    const entry = code.files.find((file) => file.path === code.entryPoint);
+    if (!entry) {
+      return { success: false, message: `Cannot repair firmware: entry point ${code.entryPoint} is missing.` };
+    }
+
+    const repairedCode: CodeArtifact = {
+      ...code,
+      files: code.files.map((file) => file.path === code.entryPoint
+        ? {
+            ...file,
+            content: rooted.content,
+            purpose: 'Firmware behaviour repaired from compiler diagnostics and rooted to the pin plan.',
+            generatedBy: 'model',
+          }
+        : file),
+      pinsSynchronised: true,
+      notes: [
+        ...code.notes,
+        `Firmware repair attempt ${context.blackboard.firmwareRepairAttempts} used compiler diagnostics and re-rooted the model plan to the assigned hardware.`,
+        ...rooted.repairs.map((repair) => `[rooted repair] ${repair}`),
+        ...rooted.warnings.map((warning) => `[rooted warning] ${warning}`),
+      ],
+    };
+
+    const compile = compileAndRecordFirmware(context, repairedCode);
+    if (!compile.ok) {
+      return {
+        success: false,
+        message: `Repaired firmware still failed the compile gate: ${(compile.errors[0] ?? compile.skippedReason ?? 'compiler exited non-zero').slice(0, 300)}`,
+        error: compile.status === 'unavailable' ? 'firmware_validation_unavailable' : 'firmware_compile_error',
+        data: {
+          compile: compileObservation(compile),
+          repair: repairContext(repairedCode),
+          attemptsRemaining: MAX_FIRMWARE_REPAIR_ATTEMPTS - context.blackboard.firmwareRepairAttempts,
+        },
+      };
+    }
+
+    return {
+      success: true,
+      message: `Firmware repair passed the compile gate${compile.ran ? ` with ${compile.compiler ?? 'the host compiler'}.` : `; check was skipped: ${compile.skippedReason ?? 'compiler unavailable'}`}`,
+      data: {
+        files: repairedCode.files.map((file) => file.path),
+        compile: compileObservation(compile),
+        repairs: rooted.repairs,
+        warnings: rooted.warnings,
+        attemptsUsed: context.blackboard.firmwareRepairAttempts,
+      },
+    };
+  },
+};
+
+/**
+ * Tool 10: build_artifacts
  * Generate Wokwi/Velxio diagram, required libraries, and step-by-step instructions.
  */
 export const buildArtifactsTool: AgentTool = {
@@ -489,9 +902,23 @@ export const buildArtifactsTool: AgentTool = {
     },
   },
   execute: (_args, context) => {
-    const { selections, pinAssignments, wiring, softwarePlan, workingCatalog: catalog, requirements } = context.blackboard;
+    const { selections, pinAssignments, wiring, softwarePlan, code, firmwareCompile, workingCatalog: catalog, requirements } = context.blackboard;
     if (!wiring) {
       return { success: false, message: 'Wiring must be routed before generating diagrams and instructions.' };
+    }
+    if (!softwarePlan || !code?.files.some((file) => file.path === code.entryPoint)) {
+      return { success: false, message: 'Firmware must be generated from the assigned pins before building artifacts.' };
+    }
+    if (!firmwareCompile) {
+      return { success: false, message: 'Firmware compile validation must run before building artifacts.' };
+    }
+    if (firmwareCompile.status === 'failed' || firmwareCompile.status === 'unavailable') {
+      const detail = firmwareCompile.diagnostics[0] ?? firmwareCompile.skippedReason ?? 'No compiler verdict was recorded.';
+      return {
+        success: false,
+        message: `Cannot build artifacts: firmware did not pass compile validation (${detail.slice(0, 300)}).`,
+        error: firmwareCompile.status === 'failed' ? 'firmware_compile_error' : 'firmware_validation_unavailable',
+      };
     }
 
     const controllerSel = selections.find((s) => {
@@ -597,9 +1024,11 @@ export const ALL_AGENT_TOOLS: Record<string, AgentTool> = {
   search_components: searchComponentsTool,
   select_component: selectComponentTool,
   deselect_component: deselectComponentTool,
+  plan_hardware: planHardwareTool,
   check_compatibility: checkCompatibilityTool,
   assign_and_verify_pins: assignPinsTool,
   route_wiring: routeWiringTool,
   generate_firmware: generateFirmwareTool,
+  repair_firmware: repairFirmwareTool,
   build_artifacts: buildArtifactsTool,
 };

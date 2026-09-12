@@ -13,6 +13,15 @@ import type { CodeArtifact, HardwarePlan, InstructionsArtifact, LibrariesArtifac
 import type { PromptAnalysis } from '@/modules/project-understanding/heuristics';
 import type { I2CBus, SerialLink } from '@/modules/pin-planner';
 
+export interface AgentFirmwareCompileStatus {
+  /** `skipped` is an honest non-verdict (disabled or no host compiler). */
+  status: 'passed' | 'failed' | 'skipped' | 'unavailable';
+  compiler?: string;
+  durationMs?: number;
+  diagnostics: string[];
+  skippedReason?: string;
+}
+
 export interface AgentBlackboard {
   prompt: string;
   projectName: string;
@@ -32,6 +41,10 @@ export interface AgentBlackboard {
   
   // Working artifacts
   code: CodeArtifact | null;
+  /** Compile-gate verdict for the current `code` artifact, if one exists. */
+  firmwareCompile: AgentFirmwareCompileStatus | null;
+  /** Bounded diagnostics-informed repairs for the current circuit topology. */
+  firmwareRepairAttempts: number;
   diagram: Diagram | null;
   libraries: LibrariesArtifact | null;
   instructions: InstructionsArtifact | null;
@@ -64,6 +77,46 @@ export interface AgentToolResult {
   message: string;
   data?: unknown;
   error?: string;
+}
+
+/** A provider-neutral tool call. The runner validates `arguments` locally —
+ * model output is never trusted as a tool input just because it is structured. */
+export interface AgentModelToolCall {
+  id: string;
+  name: string;
+  arguments: unknown;
+}
+
+export interface AgentModelToolOutput {
+  callId: string;
+  output: string;
+}
+
+export interface AgentModelTurnInput {
+  turn: number;
+  systemPrompt: string;
+  /** Initial user request, or bounded diagnostics feedback for a repair pass. */
+  userPrompt?: string;
+  tools: AgentToolSchema[];
+  toolOutputs?: AgentModelToolOutput[];
+}
+
+export interface AgentModelTurn {
+  /** A concise operational status, not private chain-of-thought. */
+  statusText?: string;
+  toolCalls: AgentModelToolCall[];
+}
+
+/**
+ * Model seam for the hardware agent. Production supplies Bedrock Converse or
+ * Astra Responses; tests can supply a deterministic scripted driver without
+ * credentials or network access.
+ */
+export interface AgentModelDriver {
+  model: string;
+  transport: 'bedrock' | 'openai-responses' | 'test';
+  reason: string;
+  next: (input: AgentModelTurnInput) => Promise<AgentModelTurn>;
 }
 
 export interface AgentToolContext {
