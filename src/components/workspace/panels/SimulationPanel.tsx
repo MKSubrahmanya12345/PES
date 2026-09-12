@@ -101,11 +101,19 @@ export function SimulationPanel() {
   });
 
   // Velxio only streams serial once someone asks for it. Ask as soon as the
-  // canvas is live, so the dashboard is never waiting on a subscription the
-  // user cannot see or trigger.
+  // canvas is live, and auto-start the emulator so the dashboard iframe
+  // receives telemetry the moment it attaches — the user shouldn't have to
+  // reach into the embedded Velxio iframe to click Play every time.
+  const startedRef = useRef(false);
   useEffect(() => {
     if (velxio.status.state !== 'pushed') return;
     velxio.subscribeSerial();
+    if (!startedRef.current) {
+      startedRef.current = true;
+      // Ask Velxio to run the emulation. The embed bridge in Velxio
+      // (src/utils/embedBridge.ts) already handles {type:'velxio:run'}.
+      velxio.run();
+    }
   }, [velxio]);
 
   /* ── Canvas → diagram.json --------------------------------------------- */

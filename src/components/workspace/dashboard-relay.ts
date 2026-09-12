@@ -65,11 +65,28 @@ export function useDashboardRelay({
   const origin = useMemo(() => {
     if (!embedUrl) return null;
     try {
-      return new URL(embedUrl, typeof window === 'undefined' ? 'http://localhost' : window.location.href).origin;
+      const url = new URL(embedUrl, typeof window === 'undefined' ? 'http://localhost' : window.location.href);
+      if (url.hostname === 'localhost' || url.hostname === '127.0.0.1') {
+        return `${url.protocol}//${url.host}`;
+      }
+      return url.origin;
     } catch {
       return null;
     }
   }, [embedUrl]);
+
+  const acceptableOrigins = useMemo((): string[] => {
+    if (!origin) return [];
+    try {
+      const url = new URL(origin);
+      if (url.hostname === 'localhost' || url.hostname === '127.0.0.1') {
+        return [`${url.protocol}//localhost:${url.port}`, `${url.protocol}//127.0.0.1:${url.port}`];
+      }
+      return [origin];
+    } catch {
+      return [origin];
+    }
+  }, [origin]);
 
   const post = useCallback(
     (message: Record<string, unknown>) => {
@@ -88,7 +105,7 @@ export function useDashboardRelay({
     }
 
     const onMessage = (event: MessageEvent) => {
-      if (event.origin !== origin) return;
+      if (!acceptableOrigins.includes(event.origin)) return;
       const message = event.data as { type?: string; data?: string };
       if (!message || typeof message.type !== 'string') return;
 

@@ -87,6 +87,22 @@ class EspQemuManager:
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
+    # ── Host ports auto-forwarded into the guest when WiFi is enabled.
+    #    Firmware running inside QEMU can reach these host services at
+    #    192.168.4.2:<guest_port>, where the host side binds to 127.0.0.1.
+    #    This is what makes an HTTP GET from the emulated ESP32 to the
+    #    Wireup dashboard or Velxio emulator actually work across the slirp
+    #    boundary — without hostfwd the guest can only initiate TCP out, but
+    #    nothing binds the host dev-server addresses inside the guest.
+    #    Format: (name, host_port, guest_port)
+    _HOST_FORWARDS: list[tuple[str, int, int]] = [
+        ('wireup-api',       8001, 8001),  # Velxio backend (QEMU mgr, compile)
+        ('velxio-emulator',  5174, 5174),  # Velxio dev server
+        ('wireup-dashboard', 5175, 5175),  # Generated dashboard dev server
+        ('host-http-alt',    3000, 3000),  # Next.js/Wireup main app
+        ('host-http',        80,    80),   # Plain HTTP
+    ]
+
     def start_instance(self, client_id: str, board_type: str,
                        callback: EventCallback,
                        firmware_b64: str | None = None,
@@ -211,9 +227,19 @@ class EspQemuManager:
         # WiFi NIC (slirp user-mode networking)
         if wifi_enabled:
             nic_model = 'esp32c3_wifi' if 'c3' in machine else 'esp32_wifi'
-            nic_arg = f'user,model={nic_model},net=192.168.4.0/24'
+            # Guest net 192.168.4.0/24; slirp makes the HOST reachable at 10.0.2.2
+            # (the standard QEMU slirp host-gateway). We forward a handful of
+            # common dev-server ports straight to the guest on matching ports,
+            # plus any caller-supplied hostfwd, so an ESP sketch can just
+            # `http://192.168.4.2:5175/...` (the host's dev server) — or to
+            # 10.0.2.2:5175 — and land on the user's generated dashboard.
+            nic_arg = f'user,model={nic_model},net=192.168.4.0/24,host=192.168.4.2,dhcpstart=192.168.4.15'
             if wifi_hostfwd_port:
                 nic_arg += f',hostfwd=tcp::{wifi_hostfwd_port}-192.168.4.15:80'
+            # Forward host dev-server ports into the guest on the same numbers,
+            # so the guest address is the port the user is familiar with.
+            for _name, host_port, guest_port in EspQemuManager._HOST_FORWARDS:
+                nic_arg += f',hostfwd=tcp::{guest_port}-10.0.2.2:{host_port}'
             cmd += ['-nic', nic_arg]
 
         logger.info('Launching ESP32 QEMU for %s: %s', inst.client_id, ' '.join(cmd))

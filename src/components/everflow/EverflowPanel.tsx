@@ -429,6 +429,93 @@ function FindingCard({ finding }: { finding: ResearchFinding }) {
 }
 
 /* -------------------------------------------------------------------------- */
+/* Human Testing & Feedback for selected Node                                  */
+/* -------------------------------------------------------------------------- */
+
+function NodeHumanFeedback({
+  projectId,
+  node,
+  onDone,
+}: {
+  projectId: string;
+  node: { id: string; label: string; goal: { state: string } };
+  onDone: () => void;
+}) {
+  const [feedback, setFeedback] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  const sendFeedback = useCallback(
+    async (type: 'idea' | 'correction' | 'note', text: string) => {
+      if (!text.trim()) return;
+      setBusy(true);
+      setMsg(null);
+      try {
+        await createEverflowInjection(projectId, {
+          type,
+          text: `[Node: ${node.label}] ${text.trim()}`,
+        });
+        setFeedback('');
+        setMsg('Feedback registered on the graph as fact!');
+        onDone();
+      } catch (err) {
+        setMsg(err instanceof Error ? err.message : 'Could not submit feedback.');
+      } finally {
+        setBusy(false);
+      }
+    },
+    [projectId, node.label, onDone],
+  );
+
+  return (
+    <div className="evf-human-feedback" style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border-subtle)' }}>
+      <header className="evf-research__head" style={{ marginBottom: 6 }}>
+        <span className="evf-col-title">Human Feedback & Testing</span>
+      </header>
+      <p className="evf-muted" style={{ marginBottom: 8, fontSize: 11 }}>
+        Test this node yourself on the bench or simulator and submit your feedback to cut off doubts.
+      </p>
+      <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+        <button
+          type="button"
+          className="btn btn--sm btn--primary"
+          disabled={busy}
+          onClick={() => void sendFeedback('note', 'Confirmed working on bench/simulator.')}
+        >
+          ✅ Confirm Working
+        </button>
+        <button
+          type="button"
+          className="btn btn--sm"
+          disabled={busy}
+          onClick={() => void sendFeedback('correction', 'Needs adjustment / test failed.')}
+        >
+          ❌ Report Issue
+        </button>
+      </div>
+      <div style={{ display: 'flex', gap: 6 }}>
+        <input
+          className="evf-input"
+          style={{ flex: 1, fontSize: 11 }}
+          placeholder="Custom test feedback or note for this node..."
+          value={feedback}
+          onChange={(e) => setFeedback(e.target.value)}
+        />
+        <button
+          type="button"
+          className="btn btn--sm"
+          disabled={busy || !feedback.trim()}
+          onClick={() => void sendFeedback('correction', feedback)}
+        >
+          Send
+        </button>
+      </div>
+      {msg ? <p className="evf-muted" style={{ marginTop: 6, color: 'var(--ok)', fontSize: 11 }}>{msg}</p> : null}
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
 /* The panel                                                                  */
 /* -------------------------------------------------------------------------- */
 
@@ -643,7 +730,9 @@ export function EverflowPanel() {
           {selectedNode ? (
             <div className="evf-inspector">
               <header>
+                <span className="evf-chip">LEVEL {selectedNode.level ?? 1}</span>
                 <span className="evf-chip">{selectedNode.kind.toUpperCase()}</span>
+                {selectedNode.subsystemClass ? <span className="evf-chip">{selectedNode.subsystemClass}</span> : null}
                 {selectedNode.owner === 'human' ? <span className="evf-chip evf-chip--you">owned by you</span> : selectedNode.owner === 'ai' ? <span className="evf-chip evf-chip--ai">owned by the agent</span> : null}
                 {selectedNode.file ? (
                   (() => {
@@ -666,8 +755,21 @@ export function EverflowPanel() {
               <details className="evf-inspector__tech">
                 <summary>technical detail</summary>
                 <dl>
+                  <dt>hierarchy</dt>
+                  <dd>Level {selectedNode.level ?? 1} {selectedNode.subsystemClass ? `· ${selectedNode.subsystemClass}` : ''} {selectedNode.parentId ? `(parent: ${selectedNode.parentId})` : '(root branch)'}</dd>
                   <dt>goal</dt>
                   <dd>{selectedNode.goal.criterion}</dd>
+                  <dt>status / verdict</dt>
+                  <dd>
+                    <strong>{selectedNode.goal.state === 'satisfied' ? 'SURETY (Satisfied / Verified)' : 'DOUBT (Open / Unconfirmed)'}</strong>
+                    {selectedResult ? ` — ${selectedResult.evidence}` : ''}
+                  </dd>
+                  {selectedNode.testSpec ? (
+                    <>
+                      <dt>test rung</dt>
+                      <dd>{selectedNode.testSpec.rung.toUpperCase()} — {selectedNode.testSpec.assertion} [{selectedNode.testSpec.status}]</dd>
+                    </>
+                  ) : null}
                   <dt>source</dt>
                   <dd>
                     {selectedNode.source.origin}
@@ -677,6 +779,7 @@ export function EverflowPanel() {
                 </dl>
               </details>
               <NodeResearch projectId={projectId} nodeId={selectedNode.id} kind={selectedNode.kind} onDone={refreshBoth} />
+              <NodeHumanFeedback projectId={projectId} node={selectedNode} onDone={refreshBoth} />
             </div>
           ) : null}
         </div>

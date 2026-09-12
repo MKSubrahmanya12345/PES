@@ -276,8 +276,15 @@ describe('partActivity', () => {
     expect(motor?.activity).toBeGreaterThan(0.9);
     expect(motor?.via).toBe('gpio');
 
-    // The pump's terminals reach no net: it must stay unpublished, not zeroed.
-    expect(values.p1).toBeUndefined();
+    // The pump's terminals reach no net: it publishes a stable zero (drive=0,
+    // rpm=0, …) rather than undefined, so surfaces/readouts always see a
+    // defined value instead of "—" on the first paint. It must NOT report
+    // itself as driven.
+    expect(values.p1).toBeDefined();
+    expect(values.p1?.drive).toBe(0);
+    expect(values.p1?.turnsPerSecond).toBe(0);
+    expect(values.p1?.rpm).toBe(0);
+    expect(values.p1?.via).toBe('');
   });
 
   it('advances a stepper by one half-step per commanded coil-pattern change', () => {

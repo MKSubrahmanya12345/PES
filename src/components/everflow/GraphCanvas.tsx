@@ -216,6 +216,8 @@ export function GraphCanvas({
           ))}
           {layout.nodes.map(({ node, x, y, width, height }) => {
             const selected = node.id === selectedId;
+            const isDoubt = node.kind === 'doubt' || node.goal.state === 'open' || node.goal.state === 'blocked_human';
+            const isSurety = node.goal.state === 'satisfied';
             return (
               <g
                 key={node.id}
@@ -230,21 +232,21 @@ export function GraphCanvas({
                 }}
                 role="button"
                 tabIndex={0}
-                aria-label={`${KIND_LABEL[node.kind]}: ${node.label} — ${goalWord(node.goal.state)}`}
+                aria-label={`L${node.level ?? 1} ${KIND_LABEL[node.kind]}: ${node.label} — ${goalWord(node.goal.state)}`}
               >
-                <title>{`${node.label}\n${node.goal.criterion}`}</title>
+                <title>{`Level ${node.level ?? 1} [${node.subsystemClass ?? KIND_LABEL[node.kind]}]\n${node.label}\nGoal: ${node.goal.criterion}`}</title>
                 <rect width={width} height={height} rx={10} className={`evf-node__body evf-goal--${node.goal.state === 'satisfied' ? 'satisfied' : node.goal.state}`} />
                 <circle cx={14} cy={16} r={4.5} className={`evf-dot evf-dot--${node.goal.state === 'satisfied' ? 'satisfied' : node.goal.state === 'open' ? 'open' : node.goal.state === 'in_progress' ? 'in-progress' : 'blocked-human'}`} />
                 <text x={26} y={20} className="evf-node__kind">
-                  {KIND_LABEL[node.kind]}
+                  {node.level !== undefined ? `L${node.level} · ` : ''}
+                  {node.subsystemClass ? node.subsystemClass : KIND_LABEL[node.kind]}
                   {node.kind === 'task' ? (node.owner === 'human' ? ' · YOU' : ' · AI') : ''}
-                  {node.swarmRole ? ` · ${node.swarmRole.replace('-swarm', '').toUpperCase()}` : ''}
                 </text>
                 <text x={12} y={38} className="evf-node__label">
-                  {truncate(node.label, 28)}
+                  {truncate(node.label, 26)}
                 </text>
                 <text x={12} y={50} className="evf-node__goal">
-                  {truncate(nodeLine(node), 30)}
+                  {isSurety ? '✅ SURETY' : isDoubt ? '❓ DOUBT' : truncate(nodeLine(node), 28)}
                 </text>
               </g>
             );
