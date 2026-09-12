@@ -243,10 +243,26 @@ free data). Together they fix "not prominent" without a redesign.
   (`everflow_pass`, `everflow_move`, `human_task_*`, `injection_registered`,
   `intake_*`, `rebuild_started`, `research_completed`, `idea_graph_*`) now
   also trigger a full refetch. Rare, pass-paced events — cheap.
-- **Not touched** — `GraphCanvas` and everything inside the graph view
+- **Not touched** — `GraphCanvas` layout and the graph view's behaviour
   (it works; the request was prominence + simplicity, not a graph change).
-  All new CSS in `src/app/globals.css` (the live stylesheet), classes
-  `goal-chip`, `goal-ring`, `hub__tab-badge`, `evf-headline`, `mapcard*`.
+- **P1–P3 shipped the same day** — B1 plain/graph two-tier view (Plain is
+  the default: brief → promises checklist → asks → composer → "since you
+  last looked" ticker; the full graph is one toggle away), B2 node-bucket
+  legend (promises/choices/guesses/proof swatches + plain goal-state words),
+  B3 verdict-first inspector ("Done — …" / "Needs you — …" with the
+  technical detail folded), B4 jargon pass ("keep working", "unowned",
+  "boxes/links", "add to agent", plain drawer footers with cross-links),
+  A2 living loop line under the build steps (the page never freezes after
+  the six steps), C1 channel unification (steer available in the tab
+  composer with the same honest gating as the drawer), B5 first-visit
+  3-step tour (localStorage, once per browser), D2 "every goal met" proof
+  summary on the Overview ("by the emulator / confirmed by you / by the
+  check engine" — read from the evaluator's own evidence words), D3
+  node→file deep links in the inspector (diagram/guide/firmware/software).
+  **Root-cause fix found on the way:** the Everflow panel's styles lived
+  only in the orphaned `wireup-styles.css` (never imported) — the panel
+  was rendering unstyled. The 169 missing class blocks were merged into
+  `globals.css` (stale duplicates skipped), the orphan deleted (C2).
 - **Proof** — typecheck clean, `next build` clean, `verify:everflow` +
   `verify:graph` green; live-verified in dev: intake (chip hidden), running
   (chip "building", card "coming online" → in-flight), completed (chip

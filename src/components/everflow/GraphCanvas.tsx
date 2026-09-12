@@ -145,12 +145,35 @@ export function GraphCanvas({
   return (
     <div className={`evf-canvas${compact ? ' evf-canvas--compact' : ''}`}>
       <div className="evf-canvas__legend" aria-hidden="true">
-        <span className="evf-legend-item"><i className="evf-dot evf-dot--satisfied" />satisfied</span>
-        <span className="evf-legend-item"><i className="evf-dot evf-dot--open" />open</span>
-        <span className="evf-legend-item"><i className="evf-dot evf-dot--in-progress" />working</span>
-        <span className="evf-legend-item"><i className="evf-dot evf-dot--blocked-human" />needs you</span>
+        <span className="evf-legend-group">
+          <span className="evf-legend-label">dot = where the goal stands</span>
+          <span className="evf-legend-item"><i className="evf-dot evf-dot--satisfied" />met</span>
+          <span className="evf-legend-item"><i className="evf-dot evf-dot--open" />open</span>
+          <span className="evf-legend-item"><i className="evf-dot evf-dot--in-progress" />working</span>
+          <span className="evf-legend-item"><i className="evf-dot evf-dot--blocked-human" />needs you</span>
+        </span>
+        <span className="evf-legend-group">
+          <span className="evf-legend-label">box = what it is</span>
+          <span className="evf-legend-bucket" title="intent · goal">
+            <i className="evf-swatch evf-swatch--intent" />
+            <i className="evf-swatch evf-swatch--goal" />promises
+          </span>
+          <span className="evf-legend-bucket" title="claim · decision">
+            <i className="evf-swatch evf-swatch--claim" />
+            <i className="evf-swatch evf-swatch--decision" />choices
+          </span>
+          <span className="evf-legend-bucket" title="assumption · doubt">
+            <i className="evf-swatch evf-swatch--assumption" />
+            <i className="evf-swatch evf-swatch--doubt" />guesses
+          </span>
+          <span className="evf-legend-bucket" title="evidence · artifact · task · more in the inspector">
+            <i className="evf-swatch evf-swatch--evidence" />
+            <i className="evf-swatch evf-swatch--artifact" />
+            <i className="evf-swatch evf-swatch--task" />proof
+          </span>
+        </span>
         <span className="evf-canvas__counts">
-          {graph.nodes.length} nodes · {layout.edges.length} edges · {layout.layers} layers
+          {graph.nodes.length} boxes · {layout.edges.length} links
         </span>
       </div>
       <div className="evf-canvas__toolbar" role="toolbar" aria-label="Graph view">

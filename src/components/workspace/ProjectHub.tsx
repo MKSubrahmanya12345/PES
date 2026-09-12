@@ -156,6 +156,22 @@ export function ProjectHub({ projectId, initial, children }: { projectId: string
       ? 'We ran into a problem while building. The run log has the details.'
       : 'Everything is ready below.';
 
+  /* The living line under the build steps: the goal loop keeps going after
+     the six steps are all done — so the page never visually freezes. */
+  const loopEvaluation = project?.everflow?.evaluation ?? null;
+  const loopPct = loopEvaluation ? Math.round((loopEvaluation.completion ?? 0) * 100) : 0;
+  const loopLine = isIntake(status)
+    ? null
+    : inProgress
+      ? { tone: 'work' as const, text: 'loop · the goal map comes online when the first build finishes' }
+      : loopEvaluation
+        ? loopEvaluation.done
+          ? { tone: 'done' as const, text: 'loop · every goal met — the agent has nothing left to do' }
+          : openAsks > 0 || loopEvaluation.blockedOnHuman
+            ? { tone: 'wait' as const, text: `loop · pass ${loopEvaluation.pass} · ${loopPct}% of goals met · ${openAsks} ${openAsks === 1 ? 'ask needs' : 'asks need'} you` }
+            : { tone: 'work' as const, text: `loop · pass ${loopEvaluation.pass} · ${loopPct}% of goals met · the agent is working the rest` }
+        : null;
+
   return (
     <HubContext.Provider value={value}>
       <header className="topbar">
@@ -215,9 +231,9 @@ export function ProjectHub({ projectId, initial, children }: { projectId: string
             type="button"
             className={`btn btn--sm${drawer === 'right' ? ' btn--on' : ''}`}
             onClick={() => setDrawer((current) => (current === 'right' ? null : 'right'))}
-            title="Add a note, idea, correction, resource or steer mid-thought"
+            title="Add a note, idea, correction, resource or steer — the agent reads it on the next pass"
           >
-            mid-thought
+            add to agent
           </button>
 
           <button type="button" className="btn btn--sm" onClick={toggleDetails} title="Show internal ids, provenance and raw data">
@@ -255,6 +271,11 @@ export function ProjectHub({ projectId, initial, children }: { projectId: string
               </li>
             ))}
           </ol>
+          {loopLine ? (
+            <Link href={`${base}/everflow`} className={`hub__loopline hub__loopline--${loopLine.tone}`} title="Open the project map">
+              {loopLine.text}
+            </Link>
+          ) : null}
         </div>
       </div>
 
