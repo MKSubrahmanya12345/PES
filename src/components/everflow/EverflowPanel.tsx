@@ -30,6 +30,7 @@ import { useHub } from '@/components/workspace/hub-context';
 import {
   buildProject,
   continueEverflowPass,
+  createEverflowInjection,
   fetchEverflow,
   injectEverflowThought,
   researchEverflowNode,

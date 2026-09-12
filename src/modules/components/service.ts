@@ -88,8 +88,8 @@ function reconcileCatalog(persisted: ComponentDefinition[]): {
       powerSourceRequirements: current.powerSourceRequirements ?? seed.powerSourceRequirements,
       libraryRequirements: current.libraryRequirements?.length ? current.libraryRequirements : seed.libraryRequirements,
       exampleUsage: current.exampleUsage?.length ? current.exampleUsage : seed.exampleUsage,
-      aliases: current.aliases.length > 0 ? current.aliases : seed.aliases,
-      keywords: current.keywords.length > 0 ? current.keywords : seed.keywords,
+      aliases: current.aliases && current.aliases.length > 0 ? current.aliases : seed.aliases,
+      keywords: current.keywords && current.keywords.length > 0 ? current.keywords : seed.keywords,
       simulator: current.simulator
         ? {
             ...seed.simulator,

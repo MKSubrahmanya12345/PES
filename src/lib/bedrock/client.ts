@@ -18,7 +18,7 @@ import { env, requireBedrockEnv } from '@/lib/validation/env';
 
 const logger = createLogger('bedrock');
 
-export type BedrockOp = 'generation' | 'validation' | 'fix' | 'codegen' | 'intake' | 'idea_expansion' | 'idea_review';
+export type BedrockOp = 'generation' | 'validation' | 'firmware_review' | 'fix' | 'codegen' | 'intake' | 'idea_expansion' | 'idea_review';
 
 export interface TokenUsage {
   inputTokens?: number;
@@ -288,32 +288,25 @@ export function extractText(output: ConverseCommandOutput): string {
     .trim();
 }
 
-/** One Bedrock Converse call with timeout + bounded retries. */
-export async function converse(options: ConverseOptions): Promise<{
-  text: string;
-  usage: TokenUsage;
+export interface ConverseRawOptions {
+  timeoutMs?: number;
+  maxRetries?: number;
+}
+
+/** Execute a ConverseCommand with retry and classification logic. */
+export async function converseRaw(
+  input: ConverseCommandInput,
+  options?: ConverseRawOptions,
+): Promise<{
+  output: ConverseCommandOutput;
   model: string;
-  stopReason?: string;
   attempts: number;
   durationMs: number;
 }> {
   const config = env().bedrock;
-  const model = options.model ?? resolveModel(options.op);
-  const maxRetries = Math.max(0, config.maxRetries);
-  const timeoutMs = options.timeoutMs ?? config.timeoutMs;
-
-  const input: ConverseCommandInput = {
-    modelId: model,
-    messages: [{ role: 'user', content: [{ text: options.userText }] }],
-    ...(options.system && options.system.length > 0
-      ? { system: options.system.map((text) => ({ text })) }
-      : {}),
-    inferenceConfig: {
-      maxTokens: options.maxTokens ?? config.maxTokens,
-      temperature: options.temperature ?? config.temperature,
-      topP: options.topP ?? config.topP,
-    },
-  };
+  const model = input.modelId ?? config.modelId ?? 'unknown';
+  const maxRetries = options?.maxRetries ?? Math.max(0, config.maxRetries);
+  const timeoutMs = options?.timeoutMs ?? config.timeoutMs;
 
   const startedAt = Date.now();
   let attempt = 0;
@@ -327,32 +320,15 @@ export async function converse(options: ConverseOptions): Promise<{
     try {
       const command = new ConverseCommand(input);
       const output = await client.send(command, { abortSignal: timeout.signal });
-      const text = extractText(output);
-
-      if (text.length === 0) {
-        throw new BedrockError('Bedrock returned an empty completion.', {
-          code: 'empty_completion',
-          retryable: attempt <= maxRetries,
-          model,
-        });
-      }
-
       return {
-        text,
-        usage: {
-          inputTokens: output.usage?.inputTokens,
-          outputTokens: output.usage?.outputTokens,
-          totalTokens: output.usage?.totalTokens,
-        },
+        output,
         model,
-        stopReason: output.stopReason,
         attempts: attempt,
         durationMs: Date.now() - startedAt,
       };
     } catch (error) {
       lastError = error instanceof BedrockError ? error : classifyError(error, model);
       logger.warn('call failed', {
-        op: options.op,
         model,
         attempt,
         code: lastError.code,
@@ -374,6 +350,59 @@ export async function converse(options: ConverseOptions): Promise<{
     throw lastError;
   }
   throw new BedrockError('Bedrock call failed for an unknown reason.', { model });
+}
+
+/** One Bedrock Converse call with timeout + bounded retries. */
+export async function converse(options: ConverseOptions): Promise<{
+  text: string;
+  usage: TokenUsage;
+  model: string;
+  stopReason?: string;
+  attempts: number;
+  durationMs: number;
+}> {
+  const config = env().bedrock;
+  const model = options.model ?? resolveModel(options.op);
+
+  const input: ConverseCommandInput = {
+    modelId: model,
+    messages: [{ role: 'user', content: [{ text: options.userText }] }],
+    ...(options.system && options.system.length > 0
+      ? { system: options.system.map((text) => ({ text })) }
+      : {}),
+    inferenceConfig: {
+      maxTokens: options.maxTokens ?? config.maxTokens,
+      temperature: options.temperature ?? config.temperature,
+      topP: options.topP ?? config.topP,
+    },
+  };
+
+  const raw = await converseRaw(input, {
+    timeoutMs: options.timeoutMs,
+    maxRetries: config.maxRetries,
+  });
+
+  const text = extractText(raw.output);
+  if (text.length === 0) {
+    throw new BedrockError('Bedrock returned an empty completion.', {
+      code: 'empty_completion',
+      retryable: false,
+      model,
+    });
+  }
+
+  return {
+    text,
+    usage: {
+      inputTokens: raw.output.usage?.inputTokens,
+      outputTokens: raw.output.usage?.outputTokens,
+      totalTokens: raw.output.usage?.totalTokens,
+    },
+    model: raw.model,
+    stopReason: raw.output.stopReason,
+    attempts: raw.attempts,
+    durationMs: raw.durationMs,
+  };
 }
 
 /** Non-throwing probe used by the API health endpoint. */

@@ -64,6 +64,28 @@ export async function reviewProject(input: ValidationPromptInput): Promise<Bedro
   return { ...result, op: 'validation' };
 }
 
+export interface FirmwareReviewPromptInput {
+  prompt: string;
+  controller: string;
+  entryPoint: string;
+  files: { path: string; content: string }[];
+  pinAssignments: unknown;
+  libraries: string[];
+}
+
+/** A focused, one-time firmware review before the simulation assets are built. */
+export async function reviewFirmware(input: FirmwareReviewPromptInput): Promise<BedrockOperationResult> {
+  const user = `USER REQUEST:\n${input.prompt}\n\nCONTROLLER: ${input.controller}\nENTRY POINT: ${input.entryPoint}\nLIBRARIES: ${input.libraries.join(', ') || 'none'}\nPIN ASSIGNMENTS:\n${JSON.stringify(input.pinAssignments, null, 2)}\n\nFIRMWARE FILES:\n${input.files.map((file) => `--- ${file.path} ---\n${file.content}`).join('\n')}\n\nReview only the firmware. Check compilation risks for the controller, setup/loop, assigned pins, required libraries, bus/serial initialization, and obvious runtime faults. Return JSON ONLY: {"verdict":"approve"|"needs_changes","issues":[{"file":"...","line":0,"severity":"error"|"warning","message":"..."}],"notes":["..."]}. Report only concrete issues.`;
+  const result = await runStructuredCall({
+    op: 'firmware_review',
+    system: ['You are a senior embedded firmware reviewer. Be concrete and adversarial, but never invent issues. Answer JSON ONLY.'],
+    user,
+    temperature: 0,
+    effort: parseEffort(env().models.effortValidation, defaultEffort('validation')),
+  });
+  return { ...result, op: 'firmware_review' };
+}
+
 /** Targeted fix — produces a changeset, never a new project. */
 export async function proposeFixChanges(input: FixPromptInput): Promise<BedrockOperationResult> {
   const result = await runStructuredCall({

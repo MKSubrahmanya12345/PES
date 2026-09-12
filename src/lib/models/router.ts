@@ -34,6 +34,7 @@ function asBedrockOp(op: string): BedrockOp {
   switch (op) {
     case 'generation':
     case 'validation':
+    case 'firmware_review':
     case 'fix':
     case 'codegen':
     case 'intake':

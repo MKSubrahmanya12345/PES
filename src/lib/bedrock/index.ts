@@ -3,16 +3,19 @@
 export {
   BedrockError,
   converse,
+  converseRaw,
   describeBedrockConfig,
   extractText,
   resolveModel,
   type BedrockOp,
   type ConverseOptions,
+  type ConverseRawOptions,
   type TokenUsage,
 } from './client';
 
 export {
   generateProjectSpec,
+  reviewFirmware,
   proposeFixChanges,
   reviewProject,
   type BedrockOperationResult,

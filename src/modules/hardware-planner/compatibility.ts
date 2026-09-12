@@ -131,17 +131,30 @@ export function checkCompatibility(input: CompatibilityInput): CompatibilityResu
     const moduleWithSupply = railFed && ['sensor', 'display', 'communication', 'input_device'].includes(definition.category);
     const railPoweredIc = (busAttached && railFed) || moduleWithSupply;
     /*
-     * A motor driver is the buffer stage itself: its 3 A rating is what it
-     * delivers to the load, not what a GPIO sinks into it. Comparing that
-     * against the MCU pin limit would outlaw every driver in the catalog.
+     * A motor driver or discrete switch (MOSFET, BJT) is the buffer stage itself:
+     * its rating is what it delivers to or clamps on the load, not what a GPIO
+     * sinks into it. Comparing that against the MCU pin limit would outlaw every
+     * power switch and flyback diode in the catalog.
      */
-    const isDriverStage = definition.category === 'motor_driver' || definition.motorRequirements?.requiresDriver === false;
+    const isDiscreteSwitchOrPassive =
+      definition.category === 'discrete' ||
+      definition.metadata?.polarity === 'nmos' ||
+      definition.metadata?.polarity === 'pmos' ||
+      definition.metadata?.noSupplyPins === true ||
+      /mosfet|transistor|bjt|diode|rectifier|optocoupler/i.test(definition.name);
+
+    const isDriverStage =
+      definition.category === 'motor_driver' ||
+      definition.motorRequirements?.requiresDriver === false ||
+      isDiscreteSwitchOrPassive;
+
     const directlyDriven =
       !definition.motorRequirements?.requiresDriver &&
       definition.category !== 'motor' &&
       definition.category !== 'motor_driver' &&
       !isDriverStage &&
       !railPoweredIc &&
+      !isDiscreteSwitchOrPassive &&
       !isPassiveInput(definition);
     if (
       maxCurrent !== undefined &&
