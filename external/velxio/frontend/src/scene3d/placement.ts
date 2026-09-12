@@ -73,6 +73,19 @@ export function numberProp(
   return Number.isFinite(n) ? n : null;
 }
 
+/** Read rotY (yaw, in degrees) from instance properties, falling back to the
+ *  model's authored bench rotation. Used by both pinned and auto-placed
+ *  instances so a live layout agent (e.g. LiveGround) can turn a part by
+ *  writing properties.rotY. */
+export function rotYOfInstance(
+  properties: Record<string, unknown> | undefined,
+  model: LoadedModel,
+): number {
+  const fromProp = numberProp(properties, 'rotY');
+  if (fromProp !== null) return (fromProp * Math.PI) / 180;
+  return model.def.bench?.rotation?.[1] ?? 0;
+}
+
 interface Resolved {
   inst: BenchInstance;
   model: LoadedModel;
@@ -109,7 +122,6 @@ export function layoutInstances(
     order.push(inst.id);
   }
 
-  const rotYOf = (model: LoadedModel): number => model.def.bench?.rotation?.[1] ?? 0;
   const scaleOf = (model: LoadedModel): number => model.def.bench?.scale ?? 1;
   const benchOffset = (model: LoadedModel): [number, number, number] =>
     (model.def.bench?.position as [number, number, number] | undefined) ?? [0, 0, 0];
@@ -128,7 +140,7 @@ export function layoutInstances(
       id: inst.id,
       key: inst.key,
       pos: new Vector3(x, y, z),
-      rotY: rotYOf(model),
+      rotY: rotYOfInstance(inst.properties, model),
       scale: scaleOf(model),
       pinned: true,
     });
@@ -150,7 +162,7 @@ export function layoutInstances(
       id: inst.id,
       key: inst.key,
       pos: new Vector3(boardCursorX + width / 2 + offset[0], height / 2 + offset[1], offset[2]),
-      rotY: rotYOf(model),
+      rotY: rotYOfInstance(inst.properties, model),
       scale: scaleOf(model),
       pinned: false,
     });
@@ -166,8 +178,6 @@ export function layoutInstances(
 
   for (const { inst, model } of partEntries) {
     const { width, depth } = footprint(model);
-    // Wrap to a new row — but never onto an empty row, so an oversized part
-    // still gets placed (alone) instead of looping.
     if (row && cursorX + width > BENCH_ROW_SPAN_MM) {
       rows.push(row);
       row = null;
@@ -193,7 +203,7 @@ export function layoutInstances(
           height / 2 + offset[1],
           rowZ + current.depth / 2 + offset[2],
         ),
-        rotY: rotYOf(model),
+        rotY: rotYOfInstance(inst.properties, model),
         scale: scaleOf(model),
         pinned: false,
       });

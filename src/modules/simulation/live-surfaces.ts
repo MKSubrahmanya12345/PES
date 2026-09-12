@@ -819,6 +819,8 @@ export const LIVE_SURFACES: Record<string, PartLiveSurfaces> = {
 
 const PASSIVE_REASON =
   'Passive/discrete: its only state is electrical (voltage, current, polarity) and the 2D canvas draws it statically — there is nothing to mirror in 3D.';
+const MECHANICAL_REASON =
+  'Mechanical hardware (chassis plate, wheel, caster, standoff): it carries no electrical state and the 2D canvas draws it statically. The live-ground agent moves it as a rigid body when a motor/prop drives it.';
 const BOARD_REASON =
   'The board body carries no live surface in 2D — its pins are the state, and every other part on the bench reads from them.';
 const CAD_BENCH_REASON =

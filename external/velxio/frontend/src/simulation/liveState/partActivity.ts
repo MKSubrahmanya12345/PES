@@ -229,9 +229,12 @@ function sample(state: SimState, entries: Map<string, WatchEntry>, tick = 0): vo
     };
 
     const previous = entry.published;
-    // A part that has nothing to report on the very first pass publishes
-    // nothing at all: "no net, no state" must not become a stored zero that
-    // some surface later reads as a measurement.
+    // Publish a stable zero on the FIRST pass even when idle, so surfaces that
+    // read `drive`/`turnsPerSecond`/`rpm` from the render store get a defined
+    // value (0) instead of undefined. Previously the store was skipped entirely
+    // until motion began, so readSignal() returned undefined for a parked
+    // motor, the plaque read "—" and the spin integrator had no baseline when
+    // drive finally ramped up.
     const idle =
       next.drive === 0 &&
       next.activity === 0 &&
@@ -241,6 +244,7 @@ function sample(state: SimState, entries: Map<string, WatchEntry>, tick = 0): vo
       next.turnsPerSecond === 0;
     if (!previous && idle) {
       entry.published = next;
+      store.setValue(component.id, { ...next });
       continue;
     }
     const changed =

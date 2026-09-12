@@ -170,8 +170,11 @@ export class Esp32Bridge {
   readonly boardId: string;
   readonly boardKind: BoardKind;
 
-  /** Set to true before connect() to enable WiFi NIC in QEMU. */
-  wifiEnabled = false;
+  /** Enable the emulated WiFi NIC by default so sketches that call
+   *  WiFi.begin(...) actually associate on slirp and can reach host
+   *  services (the generated dashboard, Velxio, Wireup API) via the
+   *  hostfwd rules configured in esp_qemu_manager. */
+  wifiEnabled = true;
 
   /**
    * Base64 FAT16 image for an on-canvas microSD card, set before connect().

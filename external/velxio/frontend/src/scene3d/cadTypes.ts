@@ -47,7 +47,10 @@ export type FeatureType =
   | 'screw_terminal'
   | 'lens'
   | 'potentiometer'
-  | 'heatsink';
+  | 'heatsink'
+  | 'wheel'
+  | 'wheel_tire'
+  | 'wheel_hub';
 
 export interface CadFeature {
   name: string;
