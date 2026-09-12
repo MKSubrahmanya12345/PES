@@ -202,9 +202,34 @@ function extractVoltageHints(prompt: string): string[] {
   return [...new Set(hints)];
 }
 
+/**
+ * Strip the intake doubt-session scaffolding from a prompt before analysis.
+ *
+ * The intake block is transcript-shaped (`Q: …\nA (ASSUMPTION — user did not
+ * answer): …`), not requirement-shaped. Feeding it to the clause splitter
+ * produced "requirements" like `4 V) Q: How will you drive the device? A
+ * (ASSUMPTION — user did not answer): Phone over Bluetooth/serial` — scaffolding
+ * tokens the design can never match, so coverage flagged the build forever.
+ * The answers themselves are kept (they carry real intent); only the
+ * Q/A/assumption wrappers and the session header go.
+ */
+export function stripIntakeScaffolding(prompt: string): string {
+  return prompt
+    // The session header explains the format to a model, not to the design.
+    .replace(/^RESOLVED CONTEXT FROM THE DOUBT SESSION.*?:\s*$/gim, '')
+    // `Q: <question>` — the question is re-asked by the answer line below.
+    .replace(/^Q:.*$/gim, '')
+    // Answer wrappers: keep the value, drop the label.
+    .replace(/^A\s*\(ASSUMPTION\s*—[^)]*\)\s*:\s*/gm, '')
+    .replace(/^A\s*\(user\)\s*:\s*/gm, '')
+    .replace(/^A\s*:\s*/gm, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 /** Run the deterministic pre-analysis. Never throws. */
 export function analyzePrompt(prompt: string): PromptAnalysis {
-  const text = prompt ?? '';
+  const text = stripIntakeScaffolding(prompt ?? '');
   const notes: string[] = [];
 
   const features: string[] = [];

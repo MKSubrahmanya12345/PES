@@ -377,6 +377,17 @@ export function generateSketch(ctx: SketchContext): string {
   lines.push('const uint32_t SENSOR_INTERVAL_MS = 200;');
   lines.push('const uint32_t TELEMETRY_INTERVAL_MS = 1000;');
   lines.push(`const bool REMOTE_CONTROLLED = ${commandSet.length > 0 ? 'true' : 'false'};`);
+  /*
+   * Obstacle guard: when the build can drive AND can see ahead (an HC-SR04 on
+   * assigned TRIG/ECHO pins), stopping before obstacles is the requested
+   * behaviour of essentially every such brief ("a distance sensor that stops
+   * the car"). Without this the sensor only fed telemetry and the build drove
+   * into walls while reporting the distance at which it did so.
+   */
+  const obstacleGuard = channels.length > 0 && ultrasonicActive;
+  if (obstacleGuard) {
+    lines.push('const float OBSTACLE_STOP_CM = 15.0f; // auto-stop distance: the car halts before hitting obstacles');
+  }
   if (buttonAssignments.length > 0) {
     lines.push('');
     lines.push('// Button handling (active-low with the internal pull-up, debounced in software).');
@@ -720,7 +731,7 @@ export function generateSketch(ctx: SketchContext): string {
   }
   if (usesBluetoothSerial) {
     lines.push('#if defined(ESP32)');
-    lines.push(`  controlLink.begin("${(ctx.projectName || 'wireup').replace(/"/g, '')}");`);
+    lines.push(`  controlLink.begin("${(ctx.projectName || 'wireup').replace(/"/g, '').replace(/[^\x20-\x7E]/g, '')}");`);
     lines.push('  Serial.println("Bluetooth Classic ready: pair with the phone and send a command character.");');
     lines.push('#endif');
   }
@@ -767,6 +778,31 @@ export function generateSketch(ctx: SketchContext): string {
     } else {
       lines.push('    (void)motionDetected;');
     }
+  }
+  if (obstacleGuard) {
+    /*
+     * Stop the car before it hits the obstacle, not after. Reverse is exempt
+     * (nothing ahead of the sensor when backing away from it) and so is a
+     * motionless state, so the guard can never fight an operator commanded
+     * stop or a retreat.
+     */
+    const reverseState = states.find((state) => state.id === 'reverse');
+    const stopState = states.find((state) => state.id === 'idle' || state.id === 'stop' || state.id === 'failsafe');
+    const haltState = stopState ?? states[0];
+    const exempt = [reverseState, stopState].filter((state) => state !== undefined);
+    const exemptCheck =
+      exempt.length > 0
+        ? ` && ${exempt.map((state) => `currentState != ${stateEnumName(state.id)}`).join(' && ')}`
+        : '';
+    lines.push('    // Obstacle guard: halt the drive before the car hits what is ahead.');
+    lines.push('    float obstacleDistanceCm = readDistanceCm();');
+    lines.push('    if (obstacleDistanceCm > 0 && obstacleDistanceCm < OBSTACLE_STOP_CM' + exemptCheck + ') {');
+    lines.push(`      applyMovement(${stateEnumName(haltState?.id ?? 'idle')});`);
+    lines.push('      stopAllMotors();');
+    lines.push('      controlLink.print("warn:obstacle stopped at ");');
+    lines.push('      controlLink.print(obstacleDistanceCm, 1);');
+    lines.push('      controlLink.println(" cm");');
+    lines.push('    }');
   }
   lines.push('  }');
   lines.push('');

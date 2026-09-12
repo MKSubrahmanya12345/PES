@@ -469,6 +469,7 @@ export function computePowerBudget(input: PowerPlanningInput): PowerBudget {
     ...(supplyComponentId ? { supplyComponentId } : {}),
     totalTypicalMa: totalTypicalMa || undefined,
     totalPeakMa: totalPeakMa || undefined,
+    sustainedPeakMa: sustainedPeakMa || undefined,
     rails,
     ...(regulator ? { regulator } : {}),
     adequate,

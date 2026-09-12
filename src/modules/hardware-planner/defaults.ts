@@ -494,15 +494,56 @@ export function applyEngineeringDefaults(input: DefaultsInput): DefaultsResult {
     const definition = definitionOf(draft.componentId);
     return definition?.motorRequirements?.requiresExternalSupply === true || definition?.category === 'motor_driver';
   });
-  const supplyPresent = presentWhere((component) => component.category === 'power' && component.powerSourceRequirements?.outputVoltage !== undefined);
+  const supplyDrafts = [...drafts, ...additions].filter((draft) => {
+    const definition = definitionOf(draft.componentId);
+    return definition?.category === 'power' && definition.powerSourceRequirements?.outputVoltage !== undefined;
+  });
+  const motorStallTotal = motorDrafts.reduce((sum, draft) => {
+    const definition = definitionOf(draft.componentId);
+    const stall = definition?.motorRequirements?.stallCurrentMa ?? definition?.currentRequirements?.maxMa ?? 0;
+    return sum + stall * draft.quantity;
+  }, 0);
 
-  if (needsExternalSupply && !supplyPresent) {
-    const motorStallTotal = motorDrafts.reduce((sum, draft) => {
-      const definition = definitionOf(draft.componentId);
-      const stall = definition?.motorRequirements?.stallCurrentMa ?? definition?.currentRequirements?.maxMa ?? 0;
-      return sum + stall * draft.quantity;
-    }, 0);
+  /*
+   * A supply that cannot carry the motor load must never survive into the
+   * bill of materials. The old rule only acted when NO supply was present, so
+   * a "9 V battery" brief (or a model that picked a PP3) blocked the
+   * load-aware path and every build with motors shipped with a supply that
+   * fails its own power budget. Now an inadequate supply is retired and
+   * replaced with one sized to the worst-case motor current — before the
+   * budget is ever computed, so the plan is born adequate instead of being
+   * failed by validation and left for the fixer.
+   */
+  const inadequateSupplies = supplyDrafts.filter((draft) => {
+    const definition = definitionOf(draft.componentId);
+    if (!definition) return false;
+    const max = definition.powerSourceRequirements?.maxCurrentMa ?? definition.currentRequirements?.maxMa ?? 0;
+    if (motorStallTotal <= 0) return false;
+    return max < motorStallTotal || definition.metadata.unsuitableForMotors === true;
+  });
 
+  if (inadequateSupplies.length > 0) {
+    const retired = inadequateSupplies.map((draft) => definitionOf(draft.componentId)?.name ?? draft.componentId);
+    for (const draft of inadequateSupplies) {
+      const inDrafts = drafts.indexOf(draft);
+      if (inDrafts !== -1) drafts.splice(inDrafts, 1);
+      const inAdditions = additions.indexOf(draft);
+      if (inAdditions !== -1) additions.splice(inAdditions, 1);
+    }
+    const replacement =
+      motorStallTotal > 500
+        ? 'battery-2s-lipo'
+        : 'battery-holder-4xaa';
+    add(
+      replacement,
+      1,
+      'power',
+      `${retired.join(', ')} cannot carry the motor load (~${motorStallTotal} mA worst case); ${definitionOf(replacement)?.name ?? replacement} is sized for it instead.`,
+    );
+    notes.push(
+      `Retired ${retired.join(', ')}: it cannot deliver the ~${motorStallTotal} mA motor load. Replaced with ${definitionOf(replacement)?.name ?? replacement}.`,
+    );
+  } else if (needsExternalSupply && supplyDrafts.length === 0) {
     if (motorStallTotal > 500) {
       add('battery-2s-lipo', 1, 'power', `Motor loads need a supply that survives stall current (~${motorStallTotal} mA worst case). A 2S LiPo delivers 7.4 V at many amps, inside the motor driver input window.`);
     } else {

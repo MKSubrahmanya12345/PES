@@ -215,6 +215,12 @@ export interface PowerBudget {
   supplyComponentId?: string;
   totalTypicalMa?: number;
   totalPeakMa?: number;
+  /**
+   * The sustained load the supply must carry continuously (motors at stall
+   * count; radio bursts do not). Exposed so a repair can size a replacement
+   * supply without re-deriving the load model.
+   */
+  sustainedPeakMa?: number;
   rails: PowerRail[];
   regulator?: {
     componentId?: string;
