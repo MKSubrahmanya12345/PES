@@ -67,7 +67,7 @@ import {
   uniqueNodeId,
   validateEverflowGraph,
 } from '@/modules/graph';
-import { astraDirectAvailable, attachToolResult, decideRoute, defaultEffort, detectModelFamily, effortForTurn, fableDirectAvailable, headroomFor, parseEffort, registerAsyncTool, updateEffort } from '@/lib/models';
+import { astraDirectAvailable, attachToolResult, decideRoute, defaultEffort, detectModelFamily, effortForTurn, fableDirectAvailable, headroomFor, isDirectAstraModelId, parseEffort, registerAsyncTool, updateEffort } from '@/lib/models';
 import { evaluateEverflow } from '@/modules/everflow/evaluate';
 import { materializeGraph } from '@/modules/everflow/materialize';
 import { runEverflowPassLegacy, type EverflowStore } from '@/modules/everflow/continuation';
@@ -587,7 +587,9 @@ async function sectionModels(): Promise<void> {
   check('effort override parses, garbage falls back', parseEffort('max', 'medium') === 'max' && parseEffort('none', 'medium') === 'medium');
   check('no direct keys in the verifier', !astraDirectAvailable() && !fableDirectAvailable());
 
+  check('direct Astra id is distinct from a Bedrock profile id', isDirectAstraModelId('gpt-6-astra') && !isDirectAstraModelId('us.openai.gpt-6-astra-v1:0'));
   check('astra + key routes direct', decideRoute('gpt-6-astra', { openai: true, anthropic: false, bedrockModel: true }).transport === 'openai');
+  check('Bedrock Astra profile stays on Bedrock even with an OpenAI key', decideRoute('us.openai.gpt-6-astra-v1:0', { openai: true, anthropic: false, bedrockModel: true }).transport === 'bedrock');
   check('astra without key rides bedrock', decideRoute('gpt-6-astra', { openai: false, anthropic: false, bedrockModel: true }).transport === 'bedrock');
   check('fable + key routes direct', decideRoute('claude-fable-5-1', { openai: false, anthropic: true, bedrockModel: true }).transport === 'anthropic');
   check('generic rides bedrock', decideRoute('some-model', { openai: true, anthropic: true, bedrockModel: true }).transport === 'bedrock');

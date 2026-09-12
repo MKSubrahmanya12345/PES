@@ -10,6 +10,7 @@ import type { AgentTool, AgentToolContext } from './types';
 import type { ComponentDefinition, ComponentInstance, ComponentPin, ComponentRole, ComponentSelection, PowerBudget } from '@/types/component';
 import type { HardwarePlan, SoftwarePlan } from '@/types/project';
 import { checkCompatibility } from '@/modules/hardware-planner/compatibility';
+import { planHardware } from '@/modules/hardware-planner';
 import { planPins } from '@/modules/pin-planner';
 import { planWiring } from '@/modules/wiring-planner';
 import { planSoftware } from '@/modules/software-planner';
@@ -41,6 +42,100 @@ function toRole(roleCandidate: string, category: string): ComponentRole {
   if (category === 'display') return 'display';
   if (category === 'power') return 'power';
   return 'other';
+}
+
+function instancesFor(definition: ComponentDefinition, quantity: number): ComponentInstance[] {
+  return Array.from({ length: quantity }, (_, index) => ({
+    instanceId: quantity > 1 ? `${definition.id}-${index + 1}` : `${definition.id}-1`,
+    componentId: definition.id,
+    name: definition.name,
+    index: index + 1,
+    label: quantity > 1 ? `${definition.name} #${index + 1}` : definition.name,
+    category: definition.category,
+  }));
+}
+
+/**
+ * A changed circuit makes every derived artifact suspect. Clearing all of them
+ * is safer than letting a model backtrack from one part while keeping the old
+ * pins, wires, sketch, or diagram. The deterministic runner rebuilds them.
+ */
+function invalidateCircuitDerivatives(blackboard: AgentToolContext['blackboard']): void {
+  blackboard.hardwarePlan = null;
+  blackboard.pinAssignments = [];
+  blackboard.serialLinks = [];
+  blackboard.i2cBuses = [];
+  blackboard.wiring = null;
+  blackboard.softwarePlan = null;
+  blackboard.code = null;
+  blackboard.diagram = null;
+  blackboard.libraries = null;
+  blackboard.instructions = null;
+  blackboard.drcIssues = [];
+}
+
+function sameSelectionTopology(a: ComponentSelection[], b: ComponentSelection[]): boolean {
+  const signature = (selection: ComponentSelection) => `${selection.componentId}:${selection.quantity}:${selection.role}`;
+  return a.length === b.length && a.map(signature).sort().join('|') === b.map(signature).sort().join('|');
+}
+
+function plannerInputFromSelections(selections: ComponentSelection[]): unknown[] {
+  return selections.map((selection) => ({
+    componentId: selection.componentId,
+    quantity: selection.quantity,
+    role: selection.role,
+    reason: selection.reason,
+    required: selection.required,
+  }));
+}
+
+/**
+ * Canonicalise model-selected parts through the hardware planner. This keeps
+ * the catalog, defaults, quantities, power budget, and compatibility report in
+ * agreement before any downstream tool commits a pin or wire.
+ */
+export async function synchroniseHardwarePlan(context: AgentToolContext): Promise<{
+  changed: boolean;
+  provisional: string[];
+  notes: string[];
+}> {
+  const blackboard = context.blackboard;
+  const previous = blackboard.selections;
+  const hadPlan = blackboard.hardwarePlan !== null;
+  const planned = await planHardware(
+    {
+      requirements: blackboard.requirements,
+      analysis: blackboard.analysis,
+      modelComponents: plannerInputFromSelections(previous),
+      catalog: blackboard.workingCatalog,
+    },
+    context.events,
+  );
+
+  const knownIds = new Set(blackboard.workingCatalog.map((component) => component.id));
+  for (const provisional of planned.provisional) {
+    if (!knownIds.has(provisional.id)) {
+      blackboard.workingCatalog.push(provisional);
+      knownIds.add(provisional.id);
+    }
+  }
+
+  const changed = !hadPlan || !sameSelectionTopology(previous, planned.selections);
+  blackboard.selections = planned.selections;
+  blackboard.hardwarePlan = planned.plan;
+  for (const note of planned.notes) {
+    if (!blackboard.notes.includes(note)) blackboard.notes.push(note);
+  }
+
+  if (changed) {
+    // Preserve the freshly calculated plan while discarding every artifact
+    // derived from the previous (or plan-less) circuit.
+    const plan = blackboard.hardwarePlan;
+    invalidateCircuitDerivatives(blackboard);
+    blackboard.hardwarePlan = plan;
+  }
+
+  return { changed, provisional: planned.provisional.map((component) => component.id), notes: planned.notes };
 }
 
 /**
@@ -121,7 +216,8 @@ export const selectComponentTool: AgentTool = {
   execute: (args, context) => {
     const componentId = String(args.componentId).trim();
     const roleRaw = String(args.role || 'Hardware component').trim();
-    const qty = Math.max(1, Math.min(10, Number(args.quantity) || 1));
+    const requestedQuantity = Number(args.quantity);
+    const qty = Number.isFinite(requestedQuantity) ? Math.max(1, Math.min(10, Math.round(requestedQuantity))) : 1;
     const def = context.blackboard.workingCatalog.find((c) => c.id === componentId);
 
     if (!def) {
@@ -133,12 +229,21 @@ export const selectComponentTool: AgentTool = {
 
     const role = toRole(roleRaw, def.category);
 
-    // Check if already selected
+    // Check if already selected. Updating quantity must rebuild concrete
+    // instances too; leaving the old instance list behind creates pins and
+    // wires for parts that are no longer in the BOM.
     const existing = context.blackboard.selections.find((s) => s.componentId === componentId);
     if (existing) {
+      const changed = existing.quantity !== qty || existing.role !== role || existing.reason !== roleRaw;
       existing.quantity = qty;
       existing.role = role;
       existing.reason = roleRaw;
+      existing.instances = instancesFor(def, qty);
+      if (changed) invalidateCircuitDerivatives(context.blackboard);
+      context.events.emit('component_selected', `Updated ${def.name} (${qty}x, ${role})`, {
+        stage: 'hardware',
+        metadata: { componentId: def.id, quantity: qty, role, updated: true },
+      });
       return {
         success: true,
         message: `Updated existing component "${def.name}" quantity to ${qty}.`,
@@ -146,14 +251,7 @@ export const selectComponentTool: AgentTool = {
       };
     }
 
-    const instances: ComponentInstance[] = Array.from({ length: qty }, (_, i) => ({
-      instanceId: qty > 1 ? `${componentId}-${i + 1}` : `${componentId}-1`,
-      componentId: def.id,
-      name: def.name,
-      index: i + 1,
-      label: qty > 1 ? `${def.name} #${i + 1}` : def.name,
-      category: def.category,
-    }));
+    const instances = instancesFor(def, qty);
 
     const selection: ComponentSelection = {
       id: createId('sel'),
@@ -169,6 +267,7 @@ export const selectComponentTool: AgentTool = {
     };
 
     context.blackboard.selections.push(selection);
+    invalidateCircuitDerivatives(context.blackboard);
     context.events.emit('component_selected', `Selected ${def.name} (${role})`, {
       stage: 'hardware',
       metadata: { componentId: def.id, quantity: qty, role },
@@ -210,9 +309,7 @@ export const deselectComponentTool: AgentTool = {
       return { success: false, message: `Component "${componentId}" is not currently in the circuit.` };
     }
     context.blackboard.selections.splice(idx, 1);
-    // Invalidate downstream dependent plans so they will be recalculated
-    context.blackboard.pinAssignments = [];
-    context.blackboard.wiring = null;
+    invalidateCircuitDerivatives(context.blackboard);
 
     context.events.emit('info', `Removed ${componentId} from the circuit for replacement.`, {
       stage: 'hardware',
@@ -227,7 +324,37 @@ export const deselectComponentTool: AgentTool = {
 };
 
 /**
- * Tool 4: check_compatibility
+ * Tool 4: plan_hardware
+ * Make the planner's catalog-grounded selections and power budget canonical.
+ */
+export const planHardwareTool: AgentTool = {
+  schema: {
+    name: 'plan_hardware',
+    description: 'Canonicalize selected catalog components, add engineering-required supporting parts, and calculate the real power and compatibility plan before assigning pins.',
+    parameters: { type: 'object', properties: {} },
+  },
+  execute: async (_args, context) => {
+    const result = await synchroniseHardwarePlan(context);
+    const plan = context.blackboard.hardwarePlan;
+    return {
+      success: Boolean(plan),
+      message: `Hardware plan is grounded on ${context.blackboard.selections.length} part selection(s)${result.changed ? '; downstream artifacts were reset for the revised circuit.' : '.'}`,
+      data: {
+        parts: context.blackboard.selections.map((selection) => ({
+          componentId: selection.componentId,
+          quantity: selection.quantity,
+          role: selection.role,
+        })),
+        powerAdequate: plan?.power.adequate ?? false,
+        risks: plan?.risks ?? [],
+        provisional: result.provisional,
+      },
+    };
+  },
+};
+
+/**
+ * Tool 5: check_compatibility
  * Check electrical and voltage compatibility between selected parts and the controller.
  */
 export const checkCompatibilityTool: AgentTool = {
@@ -280,7 +407,7 @@ export const checkCompatibilityTool: AgentTool = {
 };
 
 /**
- * Tool 5: assign_and_verify_pins
+ * Tool 6: assign_and_verify_pins
  * Assign MCU pins to all peripherals and check for shortages/conflicts.
  */
 export const assignPinsTool: AgentTool = {
@@ -350,7 +477,7 @@ export const assignPinsTool: AgentTool = {
 };
 
 /**
- * Tool 6: route_wiring
+ * Tool 7: route_wiring
  * Route the power rails and signal connections for the design.
  */
 export const routeWiringTool: AgentTool = {
@@ -406,7 +533,7 @@ export const routeWiringTool: AgentTool = {
 };
 
 /**
- * Tool 7: generate_firmware
+ * Tool 8: generate_firmware
  * Synthesize verified sketch firmware and compile-check against the assigned pin map.
  */
 export const generateFirmwareTool: AgentTool = {
@@ -476,7 +603,7 @@ export const generateFirmwareTool: AgentTool = {
 };
 
 /**
- * Tool 8: build_artifacts
+ * Tool 9: build_artifacts
  * Generate Wokwi/Velxio diagram, required libraries, and step-by-step instructions.
  */
 export const buildArtifactsTool: AgentTool = {
@@ -489,9 +616,12 @@ export const buildArtifactsTool: AgentTool = {
     },
   },
   execute: (_args, context) => {
-    const { selections, pinAssignments, wiring, softwarePlan, workingCatalog: catalog, requirements } = context.blackboard;
+    const { selections, pinAssignments, wiring, softwarePlan, code, workingCatalog: catalog, requirements } = context.blackboard;
     if (!wiring) {
       return { success: false, message: 'Wiring must be routed before generating diagrams and instructions.' };
+    }
+    if (!softwarePlan || !code?.files.some((file) => file.path === code.entryPoint)) {
+      return { success: false, message: 'Firmware must be generated from the assigned pins before building artifacts.' };
     }
 
     const controllerSel = selections.find((s) => {
@@ -597,6 +727,7 @@ export const ALL_AGENT_TOOLS: Record<string, AgentTool> = {
   search_components: searchComponentsTool,
   select_component: selectComponentTool,
   deselect_component: deselectComponentTool,
+  plan_hardware: planHardwareTool,
   check_compatibility: checkCompatibilityTool,
   assign_and_verify_pins: assignPinsTool,
   route_wiring: routeWiringTool,

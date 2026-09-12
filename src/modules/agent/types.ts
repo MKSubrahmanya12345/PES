@@ -66,6 +66,46 @@ export interface AgentToolResult {
   error?: string;
 }
 
+/** A provider-neutral tool call. The runner validates `arguments` locally —
+ * model output is never trusted as a tool input just because it is structured. */
+export interface AgentModelToolCall {
+  id: string;
+  name: string;
+  arguments: unknown;
+}
+
+export interface AgentModelToolOutput {
+  callId: string;
+  output: string;
+}
+
+export interface AgentModelTurnInput {
+  turn: number;
+  systemPrompt: string;
+  /** Present only on the first turn. */
+  userPrompt?: string;
+  tools: AgentToolSchema[];
+  toolOutputs?: AgentModelToolOutput[];
+}
+
+export interface AgentModelTurn {
+  /** A concise operational status, not private chain-of-thought. */
+  statusText?: string;
+  toolCalls: AgentModelToolCall[];
+}
+
+/**
+ * Model seam for the hardware agent. Production supplies Bedrock Converse or
+ * Astra Responses; tests can supply a deterministic scripted driver without
+ * credentials or network access.
+ */
+export interface AgentModelDriver {
+  model: string;
+  transport: 'bedrock' | 'openai-responses' | 'test';
+  reason: string;
+  next: (input: AgentModelTurnInput) => Promise<AgentModelTurn>;
+}
+
 export interface AgentToolContext {
   blackboard: AgentBlackboard;
   events: AgentEventLog;
