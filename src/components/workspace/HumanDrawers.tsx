@@ -19,6 +19,7 @@
  * poll — deliberately no second polling loop) and refresh it after actions.
  */
 
+import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import type { HumanTask } from '@/types/everflow';
@@ -162,7 +163,12 @@ function NeedsYouDrawer({ onClose }: { onClose: () => void }) {
         )}
       </div>
 
-      <footer className="drawer__foot">answers POST /everflow/respond · an answer is evidence on the graph, never a silent edit</footer>
+      <footer className="drawer__foot">
+        your answer goes back to the agent as evidence — the design never changes on its own
+        <Link href="/project/$id/everflow" className="drawer__foot-link" onClick={onClose}>
+          full history on the map →
+        </Link>
+      </footer>
     </>
   );
 }
@@ -241,7 +247,7 @@ function MidThoughtDrawer({ onClose }: { onClose: () => void }) {
   return (
     <>
       <header className="drawer__head">
-        <span className="drawer__title">You, mid-thought</span>
+        <span className="drawer__title">You add to the agent</span>
         <span className="drawer__spacer" />
         <button type="button" className="drawer__close" onClick={onClose} aria-label="Close drawer">✕</button>
       </header>
