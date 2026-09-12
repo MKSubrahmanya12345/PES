@@ -13,6 +13,15 @@ import type { CodeArtifact, HardwarePlan, InstructionsArtifact, LibrariesArtifac
 import type { PromptAnalysis } from '@/modules/project-understanding/heuristics';
 import type { I2CBus, SerialLink } from '@/modules/pin-planner';
 
+export interface AgentFirmwareCompileStatus {
+  /** `skipped` is an honest non-verdict (disabled or no host compiler). */
+  status: 'passed' | 'failed' | 'skipped' | 'unavailable';
+  compiler?: string;
+  durationMs?: number;
+  diagnostics: string[];
+  skippedReason?: string;
+}
+
 export interface AgentBlackboard {
   prompt: string;
   projectName: string;
@@ -32,6 +41,8 @@ export interface AgentBlackboard {
   
   // Working artifacts
   code: CodeArtifact | null;
+  /** Compile-gate verdict for the current `code` artifact, if one exists. */
+  firmwareCompile: AgentFirmwareCompileStatus | null;
   diagram: Diagram | null;
   libraries: LibrariesArtifact | null;
   instructions: InstructionsArtifact | null;

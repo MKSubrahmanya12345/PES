@@ -527,6 +527,7 @@ export async function runHardwareAgent(input: AgentRunInput): Promise<AgentRunOu
     wiring: null,
     softwarePlan: null,
     code: null,
+    firmwareCompile: null,
     diagram: null,
     libraries: null,
     instructions: null,

@@ -18,6 +18,7 @@ import { generateCode } from '@/modules/code-generator';
 import { generateLibraries } from '@/modules/libraries-generator';
 import { generateDiagram } from '@/modules/diagram-generator';
 import { generateInstructions } from '@/modules/instructions-generator';
+import { compileFirmware, formatDiagnostic, type CompileResult } from '@/modules/firmware-compiler';
 import { createId } from '@/lib/validation/ids';
 
 const VALID_ROLES = new Set<ComponentRole>([
@@ -68,6 +69,7 @@ function invalidateCircuitDerivatives(blackboard: AgentToolContext['blackboard']
   blackboard.wiring = null;
   blackboard.softwarePlan = null;
   blackboard.code = null;
+  blackboard.firmwareCompile = null;
   blackboard.diagram = null;
   blackboard.libraries = null;
   blackboard.instructions = null;
@@ -534,12 +536,12 @@ export const routeWiringTool: AgentTool = {
 
 /**
  * Tool 8: generate_firmware
- * Synthesize verified sketch firmware and compile-check against the assigned pin map.
+ * Generate sketch firmware and record its host compile-gate verdict against the assigned pin map.
  */
 export const generateFirmwareTool: AgentTool = {
   schema: {
     name: 'generate_firmware',
-    description: 'Author the sketch.ino embedded firmware based on the assigned pins and verified components.',
+    description: 'Author the sketch.ino embedded firmware from the assigned pins and run the host compile gate.',
     parameters: {
       type: 'object',
       properties: {},
@@ -589,14 +591,87 @@ export const generateFirmwareTool: AgentTool = {
       events: context.events,
     });
 
+    /*
+     * Code presence is not a firmware verdict. Run the same host compile gate
+     * used by the validator and firmware workbench before reporting generation
+     * as successful. Keep a rejected artifact on the blackboard: the pipeline
+     * and fixer need the exact failing source and diagnostics to repair it.
+     */
+    let compile: CompileResult;
+    try {
+      compile = compileFirmware({ files: code.files, entryPoint: code.entryPoint });
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      code.notes.push(`Firmware compile validation could not run: ${detail}`);
+      context.blackboard.code = code;
+      context.blackboard.firmwareCompile = {
+        status: 'unavailable',
+        diagnostics: [detail],
+        skippedReason: detail,
+      };
+      context.blackboard.drcIssues = [`Firmware compile validation could not run: ${detail}`];
+      return {
+        success: false,
+        message: 'Firmware was generated, but its compile validation could not run.',
+        error: 'firmware_validation_unavailable',
+        data: { files: code.files.map((file) => file.path), detail },
+      };
+    }
+
+    const errors = compile.diagnostics
+      .filter((diagnostic) => diagnostic.severity === 'error')
+      .map(formatDiagnostic);
+    const warnings = compile.diagnostics
+      .filter((diagnostic) => diagnostic.severity === 'warning')
+      .map(formatDiagnostic);
+    const compileStatus = !compile.ran ? 'skipped' : compile.ok ? 'passed' : 'failed';
+    const skippedReason = compile.skippedReason ?? 'compiler unavailable';
+
+    if (!compile.ran) {
+      code.notes.push(`Firmware compile check skipped: ${skippedReason}`);
+    } else if (!compile.ok) {
+      const details = errors.length > 0 ? errors : [compile.skippedReason ?? 'The compiler exited non-zero without a parseable diagnostic.'];
+      code.notes.push(`Firmware compile check failed: ${details.join(' | ')}`);
+      context.blackboard.drcIssues = details;
+    } else {
+      code.notes.push(`Firmware compile check passed with ${compile.compiler ?? 'host compiler'} in ${compile.durationMs} ms.`);
+      context.blackboard.drcIssues = [];
+    }
+
     context.blackboard.code = code;
+    context.blackboard.firmwareCompile = {
+      status: compileStatus,
+      ...(compile.compiler ? { compiler: compile.compiler } : {}),
+      durationMs: compile.durationMs,
+      diagnostics: [...errors, ...warnings],
+      ...(!compile.ran ? { skippedReason } : {}),
+    };
+
+    if (!compile.ok) {
+      return {
+        success: false,
+        message: `Firmware failed the compile gate: ${(errors[0] ?? compile.skippedReason ?? 'compiler exited non-zero').slice(0, 300)}`,
+        error: 'firmware_compile_error',
+        data: {
+          files: code.files.map((file) => file.path),
+          compile: { status: compileStatus, compiler: compile.compiler, durationMs: compile.durationMs, errors, warnings },
+        },
+      };
+    }
 
     return {
       success: code.files.length > 0,
-      message: `Firmware generated: ${code.files.length} file(s).`,
+      message: `Firmware generated: ${code.files.length} file(s). Compile check ${compileStatus}${compile.ran ? ` (${compile.compiler ?? 'host compiler'}, ${warnings.length} warning(s)).` : `: ${skippedReason}`}`,
       data: {
-        files: code.files.map((f) => f.path),
+        files: code.files.map((file) => file.path),
         notes: code.notes,
+        compile: {
+          status: compileStatus,
+          ...(compile.compiler ? { compiler: compile.compiler } : {}),
+          durationMs: compile.durationMs,
+          warnings,
+          ...(compile.ran ? {} : { skippedReason }),
+        },
       },
     };
   },
@@ -616,12 +691,23 @@ export const buildArtifactsTool: AgentTool = {
     },
   },
   execute: (_args, context) => {
-    const { selections, pinAssignments, wiring, softwarePlan, code, workingCatalog: catalog, requirements } = context.blackboard;
+    const { selections, pinAssignments, wiring, softwarePlan, code, firmwareCompile, workingCatalog: catalog, requirements } = context.blackboard;
     if (!wiring) {
       return { success: false, message: 'Wiring must be routed before generating diagrams and instructions.' };
     }
     if (!softwarePlan || !code?.files.some((file) => file.path === code.entryPoint)) {
       return { success: false, message: 'Firmware must be generated from the assigned pins before building artifacts.' };
+    }
+    if (!firmwareCompile) {
+      return { success: false, message: 'Firmware compile validation must run before building artifacts.' };
+    }
+    if (firmwareCompile.status === 'failed' || firmwareCompile.status === 'unavailable') {
+      const detail = firmwareCompile.diagnostics[0] ?? firmwareCompile.skippedReason ?? 'No compiler verdict was recorded.';
+      return {
+        success: false,
+        message: `Cannot build artifacts: firmware did not pass compile validation (${detail.slice(0, 300)}).`,
+        error: firmwareCompile.status === 'failed' ? 'firmware_compile_error' : 'firmware_validation_unavailable',
+      };
     }
 
     const controllerSel = selections.find((s) => {

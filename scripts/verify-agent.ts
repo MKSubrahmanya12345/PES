@@ -95,6 +95,11 @@ async function main(): Promise<void> {
     (output.blackboard.instructions?.sections.length ?? 0) > 0,
     `${output.blackboard.selections.length} parts, ${output.blackboard.pinAssignments.length} pins, ${output.blackboard.wiring?.connections.length ?? 0} wires`,
   );
+  check('firmware generation records an honest compile-gate verdict',
+    output.blackboard.firmwareCompile !== null &&
+    ['passed', 'failed', 'skipped', 'unavailable'].includes(output.blackboard.firmwareCompile.status),
+    output.blackboard.firmwareCompile?.status ?? 'no compile verdict',
+  );
   check('step numbers are contiguous after model and deterministic actions', output.steps.every((step, index) => step.step === index + 1), `${output.steps.length} records`);
   check('agent events do not persist raw model status text', !events.list().some((event) => event.message.includes('Finding the requested controller')));
 
@@ -111,6 +116,7 @@ async function main(): Promise<void> {
     output.blackboard.wiring === null &&
     output.blackboard.softwarePlan === null &&
     output.blackboard.code === null &&
+    output.blackboard.firmwareCompile === null &&
     output.blackboard.diagram === null &&
     output.blackboard.libraries === null &&
     output.blackboard.instructions === null,
