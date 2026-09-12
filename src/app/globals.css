@@ -4034,6 +4034,79 @@ body {
   letter-spacing: 0.02em;
 }
 
+/* Final landing surface: keep the first page strictly black and white. */
+.landing {
+  isolation: auto;
+  background: #ffffff;
+  background-image: none;
+  color: #111111;
+}
+
+.landing::before,
+.landing::after {
+  display: none;
+  background: none;
+  content: none;
+}
+
+.landing__title,
+.landing__subtitle,
+.landing__form-label,
+.landing__note {
+  color: #111111;
+}
+
+.landing__subtitle {
+  color: #555555;
+}
+
+.landing .prompt-form {
+  border: 1px solid #111111;
+  border-radius: 0;
+  background: #ffffff;
+  box-shadow: 8px 8px 0 #111111;
+  backdrop-filter: none;
+}
+
+.landing .prompt-form__head,
+.landing .prompt-form__foot {
+  border-color: #111111;
+  background: #ffffff;
+  color: #555555;
+}
+
+.landing .prompt-form__textarea {
+  background: #ffffff;
+  color: #111111;
+}
+
+.landing .prompt-form__textarea::placeholder {
+  color: #888888;
+}
+
+.landing .prompt-form__hint {
+  color: #555555;
+}
+
+.landing .btn--primary {
+  border-color: #111111;
+  background: #111111;
+  color: #ffffff;
+}
+
+.landing .example {
+  border-color: #cccccc;
+  border-radius: 0;
+  background: #ffffff;
+  color: #111111;
+  backdrop-filter: none;
+}
+
+.landing .example:hover:not(:disabled) {
+  border-color: #111111;
+  background: #f5f5f5;
+}
+
 .drawer__count {
   font-family: var(--mono);
   font-size: 10.5px;
