@@ -11,9 +11,9 @@
 /** Reasoning depth. Shared vocabulary across Astra + Fable (both min `low`). */
 export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
-export type ModelFamily = 'astra' | 'fable' | 'generic' | 'none';
+export type ModelFamily = 'astra' | 'fable' | 'gemini' | 'generic' | 'none';
 
-export type ModelTransport = 'bedrock' | 'openai' | 'anthropic';
+export type ModelTransport = 'bedrock' | 'openai' | 'anthropic' | 'gemini';
 
 export interface ModelCallUsage {
   inputTokens?: number;

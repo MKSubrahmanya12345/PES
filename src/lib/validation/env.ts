@@ -87,6 +87,7 @@ const ServerEnvSchema = z.object({
   // model ids are served through Bedrock Converse.
   OPENAI_API_KEY: optionalString,
   ANTHROPIC_API_KEY: optionalString,
+  GEMINI_API_KEY: optionalString,
 
   // Reasoning effort per operation for the Astra/Fable families
   // (low|medium|high|xhigh|max; generic models ignore these).
@@ -195,6 +196,7 @@ export interface ServerEnv {
   models: {
     openaiApiKey?: string;
     anthropicApiKey?: string;
+    geminiApiKey?: string;
     effortExpansion?: string;
     effortR2?: string;
     effortReview?: string;
@@ -293,6 +295,7 @@ function read(): ServerEnv {
     models: {
       openaiApiKey: parsed.OPENAI_API_KEY,
       anthropicApiKey: parsed.ANTHROPIC_API_KEY,
+      geminiApiKey: parsed.GEMINI_API_KEY,
       effortExpansion: parsed.WIREUP_MODEL_EFFORT_EXPANSION,
       effortR2: parsed.WIREUP_MODEL_EFFORT_R2,
       effortReview: parsed.WIREUP_MODEL_EFFORT_REVIEW,
