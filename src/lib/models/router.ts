@@ -4,6 +4,7 @@
  * One function, `converseRouted`, that every model operation calls instead
  * of Bedrock directly:
  *
+ *   direct Gemini id + GEMINI_API_KEY set   → Gemini generateContent (direct)
  *   direct Astra id + OPENAI_API_KEY set     → OpenAI Responses (direct)
  *   model id is Fable + ANTHROPIC_API_KEY set → Anthropic Messages (direct)
  *   otherwise, Bedrock configured             → Bedrock Converse, with
@@ -23,7 +24,8 @@ import { converse, type BedrockOp } from '@/lib/bedrock/client';
 import { createLogger, describeError } from '@/lib/logging/logger';
 
 import { callFable, fableDirectAvailable } from './anthropic-fable';
-import { detectModelFamily, isDirectAstraModelId } from './detect';
+import { detectModelFamily, isDirectAstraModelId, isDirectGeminiModelId } from './detect';
+import { callGemini, geminiDirectAvailable } from './gemini';
 import { astraDirectAvailable, callAstra } from './openai-astra';
 import type { EffortLevel, ModelTransport, RoutedCallOptions, RoutedCallResult } from './types';
 import { ModelRouteError } from './types';
@@ -53,10 +55,20 @@ export interface RouteDecision {
 }
 
 /** Pure routing decision (no I/O — the verifier asserts on this). */
-export function decideRoute(model: string, keys: { openai: boolean; anthropic: boolean; bedrockModel: boolean }): RouteDecision {
+export function decideRoute(
+  model: string,
+  keys: { openai: boolean; anthropic: boolean; gemini: boolean; bedrockModel: boolean },
+): RouteDecision {
   const family = detectModelFamily(model);
-  if (family === 'astra' && isDirectAstraModelId(model) && keys.openai) return { transport: 'openai', reason: 'Direct Astra model id + OPENAI_API_KEY — direct Responses API.' };
-  if (family === 'fable' && keys.anthropic) return { transport: 'anthropic', reason: 'Fable model id + ANTHROPIC_API_KEY — direct Messages API.' };
+  if (family === 'gemini' && isDirectGeminiModelId(model) && keys.gemini) {
+    return { transport: 'gemini', reason: 'Gemini model id + GEMINI_API_KEY — direct generateContent API.' };
+  }
+  if (family === 'astra' && isDirectAstraModelId(model) && keys.openai) {
+    return { transport: 'openai', reason: 'Direct Astra model id + OPENAI_API_KEY — direct Responses API.' };
+  }
+  if (family === 'fable' && keys.anthropic) {
+    return { transport: 'anthropic', reason: 'Fable model id + ANTHROPIC_API_KEY — direct Messages API.' };
+  }
   if (keys.bedrockModel) {
     if (family === 'astra') {
       return {
@@ -66,16 +78,22 @@ export function decideRoute(model: string, keys: { openai: boolean; anthropic: b
           : 'Astra Bedrock profile/id via Bedrock Converse (not a valid direct Responses model id).',
       };
     }
-    if (family === 'fable') return { transport: 'bedrock', reason: 'Fable model id via Bedrock Converse (no ANTHROPIC_API_KEY — direct-only knobs unavailable).' };
+    if (family === 'fable') {
+      return { transport: 'bedrock', reason: 'Fable model id via Bedrock Converse (no ANTHROPIC_API_KEY — direct-only knobs unavailable).' };
+    }
+    if (family === 'gemini') {
+      return { transport: 'bedrock', reason: 'Gemini model id via Bedrock Converse (no GEMINI_API_KEY — direct generateContent unavailable).' };
+    }
     return { transport: 'bedrock', reason: 'Bedrock Converse.' };
   }
   return { transport: 'bedrock', reason: 'No model configured.' };
 }
 
-function liveKeys(model: string): { openai: boolean; anthropic: boolean; bedrockModel: boolean } {
+function liveKeys(model: string): { openai: boolean; anthropic: boolean; gemini: boolean; bedrockModel: boolean } {
   return {
     openai: astraDirectAvailable(),
     anthropic: fableDirectAvailable(),
+    gemini: geminiDirectAvailable(),
     bedrockModel: model.trim().length > 0,
   };
 }
@@ -89,6 +107,40 @@ export async function converseRouted(options: RoutedCallOptions): Promise<Routed
     throw new ModelRouteError('No model configured for this operation.', { code: 'no_model', model: options.model });
   }
 
+  /* ---------------------------- Gemini direct ---------------------------- */
+  if (decision.transport === 'gemini') {
+    try {
+      const result = await callGemini({
+        model: options.model.replace(/^models\//, ''),
+        system: options.system,
+        userText: options.userText,
+        maxTokens: options.maxTokens,
+        temperature: options.temperature,
+        topP: options.topP,
+        timeoutMs: options.timeoutMs,
+      });
+      logger.info('routed call', { op: options.op, model: options.model, transport: 'gemini', family });
+      return {
+        text: result.text,
+        usage: result.usage,
+        model: options.model,
+        transport: 'gemini',
+        family,
+        effort: null,
+        ...(result.stopReason ? { stopReason: result.stopReason } : {}),
+        attempts: 1,
+        durationMs: Date.now() - startedAt,
+      };
+    } catch (error) {
+      throw new ModelRouteError(describeError(error).message, {
+        code: 'direct_call_failed',
+        retryable: true,
+        model: options.model,
+      });
+    }
+  }
+
+  /* ---------------------------- OpenAI Astra ---------------------------- */
   if (decision.transport === 'openai') {
     try {
       const result = await callAstra({
@@ -115,6 +167,7 @@ export async function converseRouted(options: RoutedCallOptions): Promise<Routed
     }
   }
 
+  /* ---------------------------- Anthropic Fable ------------------------- */
   if (decision.transport === 'anthropic') {
     try {
       const result = await callFable({
@@ -141,12 +194,14 @@ export async function converseRouted(options: RoutedCallOptions): Promise<Routed
     }
   }
 
-  // Bedrock transport (the default): family-correct inference config.
+  /* ---------------------------- Bedrock (default) ----------------------- */
   const newFamily = family === 'astra' || family === 'fable';
   const effort: EffortLevel | null = newFamily ? (options.effort ?? (family === 'astra' ? 'medium' : 'high')) : null;
   // Bedrock Converse has no effort field: record it, and name it in the
   // system prompt so the model still sees the requested depth. Sampling
   // params are stripped for the new families (both vendors reject them).
+  // Gemini on Bedrock accepts standard sampling params.
+  const stripSampling = newFamily;
   const system = newFamily && effort ? [...options.system, `Reasoning effort for this request: ${effort}. (Transport: Bedrock Converse.)`] : options.system;
   logger.info('routed call', { op: options.op, model: options.model, transport: 'bedrock', family, effort });
 
@@ -156,7 +211,7 @@ export async function converseRouted(options: RoutedCallOptions): Promise<Routed
     system,
     userText: options.userText,
     maxTokens: options.maxTokens,
-    ...(newFamily ? {} : { temperature: options.temperature, topP: options.topP }),
+    ...(stripSampling ? {} : { temperature: options.temperature, topP: options.topP }),
     timeoutMs: options.timeoutMs,
   });
   return {

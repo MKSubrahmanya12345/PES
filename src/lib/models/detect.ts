@@ -17,11 +17,31 @@ export function detectModelFamily(modelId: string | undefined | null): ModelFami
   if (haystack.includes('gpt-6-astra') || haystack.includes('astra')) return 'astra';
   if (haystack.includes('fable')) return 'fable';
   if (haystack.includes('opus-5') || haystack.includes('sonnet-5')) return 'fable'; // Mythos-era Claude shares the effort API
+  if (/\bgemini\b/.test(haystack)) return 'gemini';
   return 'generic';
 }
 
 export function isAstraModel(modelId: string | undefined | null): boolean {
   return detectModelFamily(modelId) === 'astra';
+}
+
+export function isGeminiModel(modelId: string | undefined | null): boolean {
+  return detectModelFamily(modelId) === 'gemini';
+}
+
+/**
+ * A family match is not enough to send an id to the Gemini endpoint. Bedrock
+ * inference-profile ids/ARNs may also reference Gemini providers; those stay
+ * on Bedrock. A direct Gemini id starts with `gemini-` (with optional
+ * `models/` prefix) and contains no ARN-like `:` or `/` separators beyond
+ * that.
+ */
+export function isDirectGeminiModelId(modelId: string | undefined | null): boolean {
+  const id = modelId?.trim().toLowerCase().replace(/^models\//, '') ?? '';
+  if (!id.startsWith('gemini-')) return false;
+  // ARNs / Bedrock profile ids always contain colons or `arn:`; reject them.
+  if (id.includes('arn:') || id.includes(':')) return false;
+  return true;
 }
 
 /**

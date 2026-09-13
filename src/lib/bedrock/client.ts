@@ -412,11 +412,64 @@ export async function describeBedrockConfig(): Promise<{
   model?: string;
   validationModel?: string;
   fixerModel?: string;
+  codegenModel?: string;
+  transport?: 'bedrock' | 'openai' | 'anthropic' | 'gemini';
   maxTokens: number;
   temperature: number;
   problem?: string;
 }> {
   const config = env().bedrock;
+  const modelId = config.modelId?.trim() ?? '';
+  const haystack = modelId.toLowerCase().replace(/^models\//, '');
+
+  // Detect direct-transport availability WITHOUT requiring Bedrock creds.
+  const hasOpenAI = Boolean(env().models.openaiApiKey);
+  const hasAnthropic = Boolean(env().models.anthropicApiKey);
+  const hasGemini = Boolean(env().models.geminiApiKey);
+  const directAstra = /^gpt-6-astra(?:[-.][a-z0-9]+)*$/.test(haystack);
+  const directGemini = haystack.startsWith('gemini-') && !haystack.includes('arn:') && !haystack.includes(':');
+  const directFable = /fable|opus-5|sonnet-5/.test(haystack);
+
+  if (directAstra && hasOpenAI) {
+    return {
+      configured: true,
+      region: config.region,
+      model: config.modelId,
+      validationModel: config.validationModelId || config.modelId,
+      fixerModel: config.fixerModelId || config.modelId,
+      codegenModel: config.codegenModelId,
+      transport: 'openai',
+      maxTokens: config.maxTokens,
+      temperature: config.temperature,
+    };
+  }
+  if (directFable && hasAnthropic) {
+    return {
+      configured: true,
+      region: config.region,
+      model: config.modelId,
+      validationModel: config.validationModelId || config.modelId,
+      fixerModel: config.fixerModelId || config.modelId,
+      codegenModel: config.codegenModelId,
+      transport: 'anthropic',
+      maxTokens: config.maxTokens,
+      temperature: config.temperature,
+    };
+  }
+  if (directGemini && hasGemini) {
+    return {
+      configured: true,
+      region: config.region,
+      model: config.modelId,
+      validationModel: config.validationModelId || config.modelId,
+      fixerModel: config.fixerModelId || config.modelId,
+      codegenModel: config.codegenModelId,
+      transport: 'gemini',
+      maxTokens: config.maxTokens,
+      temperature: config.temperature,
+    };
+  }
+
   try {
     requireBedrockEnv();
     return {
@@ -425,6 +478,8 @@ export async function describeBedrockConfig(): Promise<{
       model: config.modelId,
       validationModel: config.validationModelId || config.modelId,
       fixerModel: config.fixerModelId || config.modelId,
+      codegenModel: config.codegenModelId,
+      transport: 'bedrock',
       maxTokens: config.maxTokens,
       temperature: config.temperature,
     };
