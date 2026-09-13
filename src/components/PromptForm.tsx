@@ -31,7 +31,7 @@ const EXAMPLES: { title: string; prompt: string }[] = [
 const MIN_LENGTH = 8;
 const MAX_LENGTH = 4000;
 
-export function PromptForm() {
+export function PromptForm({ requireAuth = false }: { requireAuth?: boolean }) {
   const router = useRouter();
   const [prompt, setPrompt] = useState('');
   const [busy, setBusy] = useState(false);
@@ -43,6 +43,11 @@ export function PromptForm() {
     async (event?: FormEvent<HTMLFormElement>) => {
       event?.preventDefault();
       if (busy) return;
+
+      if (requireAuth) {
+        router.push(`/login?next=${encodeURIComponent('/')}`);
+        return;
+      }
 
       const trimmed = prompt.trim();
       if (trimmed.length < MIN_LENGTH) {
@@ -61,13 +66,23 @@ export function PromptForm() {
       try {
         const response = await fetch('/api/projects', {
           method: 'POST',
+          credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ prompt: trimmed, mode: direct ? 'direct' : 'everflow' }),
         });
 
         const payload = (await response.json().catch(() => null)) as
-          | { ok?: boolean; data?: { project?: { id?: string } }; error?: { message?: string; details?: string } }
+          | {
+              ok?: boolean;
+              data?: { project?: { id?: string } };
+              error?: { message?: string; details?: string; code?: string };
+            }
           | null;
+
+        if (response.status === 401) {
+          router.push(`/login?next=${encodeURIComponent('/')}`);
+          return;
+        }
 
         if (!response.ok || !payload?.ok) {
           const message = payload?.error?.message ?? `The server responded with ${response.status}.`;
@@ -91,7 +106,7 @@ export function PromptForm() {
         setBusy(false);
       }
     },
-    [busy, prompt, router],
+    [busy, prompt, router, requireAuth, direct],
   );
 
   const tooLong = prompt.length > MAX_LENGTH;

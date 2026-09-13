@@ -71,6 +71,9 @@ function baseProject(prompt: string, id = 'ig-verify'): ProjectState {
   const now = nowIso();
   return {
     id,
+    ownerId: 'local-dev',
+    orgId: null,
+    visibility: 'private',
     name: 'Verify Idea Graph',
     prompt,
     status: 'completed',

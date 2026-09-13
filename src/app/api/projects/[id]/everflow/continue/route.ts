@@ -13,15 +13,22 @@ import { describeError, logger } from '@/lib/logging/logger';
 import { getProjectState } from '@/lib/mongodb/projects';
 import { env } from '@/lib/validation/env';
 import { continueEverflow, evaluateEverflow, materializeGraph, mongoEverflowStore } from '@/modules/everflow';
+import { AuthError, requireAuth } from '@/lib/auth/session';
+import { assertCanRead, assertCanWrite } from '@/lib/auth/project-access';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
-export async function POST(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
+    const auth = await requireAuth(request);
+    if (!auth) return jsonError(401, { code: 'unauthenticated', message: 'Sign in required.' });
+
     const { id } = await params;
     const state = await getProjectState(id);
+    if (!state) return jsonError(404, { code: 'not_found', message: 'Project not found.' });
+    assertCanWrite(state, auth);
     if (!state) return jsonError(404, { code: 'not_found', message: 'Project not found.' });
     if (state.status === 'intake') {
       return jsonError(409, { code: 'not_in_intake', message: 'Start the build first — the loop works on finished designs.' });

@@ -1,50 +1,68 @@
 /**
- * Where the two local services live.
+ * Simulation endpoints.
  *
- * The /simulation page embeds two things the user runs on their own machine:
+ * Product mode prefers a HOSTED Velxio URL (WIREUP_VELXIO_URL). Localhost is
+ * only the developer fallback — never the default story told to end users.
  *
- *   Velxio     `external/velxio/frontend` — `npm run dev` → :5174
- *   Dashboard  the zip this build produced — `npm run dev` → :5175
- *
- * Both are addressed by URL, and both default to those ports, because that is
- * what the vendored Velxio's `vite.config.ts` and the generated dashboard's
- * `vite.config.ts` actually bind. Either can be overridden from the
- * environment when a port is already taken.
- *
- * These are BROWSER-side URLs. Wireup's server never fetches them — it cannot;
- * they live on the user's laptop, not on the server. They are handed to the
- * page and used as iframe sources, which is the only thing that works when the
- * two halves are on different machines.
+ * The generated dashboard is served by Wireup itself at
+ * `/api/projects/:id/simulation/dashboard/` so users do not run a second
+ * Vite server. WIREUP_WEBSITE_URL overrides that when you deliberately want
+ * an external dashboard host.
  */
 
 export interface SimulationEndpoints {
-  /** Velxio frontend (the emulator canvas). */
+  /** Velxio frontend (the emulator canvas). Empty string = not configured. */
   velxioUrl: string;
-  /** The generated dashboard's dev server. */
+  /** Dashboard origin or path. */
   websiteUrl: string;
   /** Which half the page opens on. */
   defaultView: 'simulation' | 'website';
+  /** True when Velxio is a real hosted/public URL (not localhost). */
+  velxioHosted: boolean;
+  /** True when the dashboard is the in-app preview (no user zip server). */
+  dashboardHosted: boolean;
 }
 
-const DEFAULT_VELXIO_URL = 'http://localhost:5174';
-const DEFAULT_WEBSITE_URL = 'http://localhost:5175';
-
-function clean(value: string | undefined, fallback: string): string {
+function clean(value: string | undefined): string {
   const trimmed = value?.trim();
-  if (!trimmed) return fallback;
+  if (!trimmed) return '';
   try {
-    // Normalise so an origin with a trailing slash or a path both work.
     return new URL(trimmed).toString().replace(/\/$/, '');
   } catch {
-    return fallback;
+    // Allow relative paths like /api/projects/x/simulation/dashboard
+    if (trimmed.startsWith('/')) return trimmed.replace(/\/$/, '');
+    return '';
   }
 }
 
-export function simulationConfig(): SimulationEndpoints {
+function isLocalhost(url: string): boolean {
+  if (!url) return true;
+  try {
+    const host = new URL(url, 'http://localhost').hostname;
+    return host === 'localhost' || host === '127.0.0.1' || host === '::1';
+  } catch {
+    return true;
+  }
+}
+
+export function simulationConfig(projectId?: string): SimulationEndpoints {
+  const fromEnv = clean(process.env.WIREUP_VELXIO_URL);
+  const websiteOverride = clean(process.env.WIREUP_WEBSITE_URL);
   const view = process.env.WIREUP_SIM_DEFAULT_VIEW?.trim().toLowerCase();
+
+  const velxioUrl = fromEnv;
+  const dashboardHosted = !websiteOverride;
+  const websiteUrl =
+    websiteOverride ||
+    (projectId ? `/api/projects/${projectId}/simulation/dashboard` : '/api/simulation/dashboard-placeholder');
+
+  const velxioHosted = Boolean(velxioUrl) && !isLocalhost(velxioUrl);
+
   return {
-    velxioUrl: clean(process.env.WIREUP_VELXIO_URL, DEFAULT_VELXIO_URL),
-    websiteUrl: clean(process.env.WIREUP_WEBSITE_URL, DEFAULT_WEBSITE_URL),
-    defaultView: view === 'website' ? 'website' : 'simulation',
+    velxioUrl,
+    websiteUrl,
+    defaultView: view === 'website' || !velxioUrl ? 'website' : 'simulation',
+    velxioHosted,
+    dashboardHosted,
   };
 }

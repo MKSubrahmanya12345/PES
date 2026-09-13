@@ -411,6 +411,9 @@ function baseProject(overrides: Partial<ProjectState> = {}): ProjectState {
   const now = nowIso();
   return {
     id: 'graph-verify',
+    ownerId: 'local-dev',
+    orgId: null,
+    visibility: 'private' as const,
     name: 'Verify Car',
     prompt: 'build a bluetooth rc car with two dc motors and an ultrasonic sensor that stops before obstacles',
     status: 'completed',

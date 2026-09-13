@@ -26,6 +26,8 @@ import { logger } from '@/lib/logging/logger';
 import { applyCanvasToDiagram, CanvasSyncError, type VlxCanvasPayload } from '@/modules/simulation';
 import { appendRevision, createRevision } from '@/modules/orchestrator/revisions';
 import { isRunning } from '@/modules/orchestrator';
+import { AuthError, requireAuth } from '@/lib/auth/session';
+import { assertCanRead, assertCanWrite } from '@/lib/auth/project-access';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -77,6 +79,9 @@ const CanvasPayloadSchema = z.object({
 const BodySchema = z.object({ canvas: CanvasPayloadSchema });
 
 export async function POST(request: NextRequest, context: RouteContext) {
+  const auth = await requireAuth(request);
+  if (!auth) return jsonError(401, { code: 'unauthenticated', message: 'Sign in required.' });
+
   const { id } = await context.params;
   if (!id || id.trim().length === 0) {
     return jsonError(400, { code: 'bad_request', message: 'A project id is required.' });
@@ -90,6 +95,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
     if (!project) {
       return jsonError(404, { code: 'not_found', message: `Project ${id} does not exist.` });
     }
+    assertCanWrite(project, auth);
 
     // Writing the diagram out from under a running pipeline would be racing the
     // generator for the same field, and the generator would win.
@@ -150,6 +156,9 @@ export async function POST(request: NextRequest, context: RouteContext) {
       diagram: saved?.artifacts.diagram ?? result.diagram,
     });
   } catch (error) {
+    if (error instanceof AuthError) {
+      return jsonError(error.status, { code: error.code, message: error.message });
+    }
     if (error instanceof BadRequestError) {
       return jsonError(400, { code: 'bad_request', message: error.message, details: error.issues.join('; ') });
     }

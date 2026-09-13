@@ -149,7 +149,7 @@ function parseIntakePayload(payload: unknown): IntakeLlmPayload | null {
   return {
     ...(data.name ? { name: data.name } : {}),
     ...(data.summary ? { summary: data.summary } : {}),
-    doubts: (data.doubts.filter((doubt): doubt is IntakeDoubtSeed => doubt !== null) as unknown as IntakeDoubtSeed[]).map((doubt) => ({
+    doubts: (data.doubts.filter((doubt) => doubt != null) as IntakeDoubtSeed[]).map((doubt) => ({
       question: doubt.question,
       consequence: doubt.consequence || 'It shapes the build.',
       decider: doubt.decider,

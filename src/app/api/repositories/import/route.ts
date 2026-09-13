@@ -5,18 +5,33 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { z } from 'zod';
+
+import { AuthError, requireAuth } from '@/lib/auth/session';
 import { jsonError, jsonOk, readJson } from '@/lib/http';
 import { createProjectRecord } from '@/lib/mongodb/projects';
 import { startGeneration } from '@/modules/orchestrator';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
 const exec = promisify(execFile);
-const Schema = z.object({ url: z.string().trim().url().refine((value) => /^https:\/\/(www\.)?github\.com\/[^/]+\/[^/]+(?:\.git)?\/?$/.test(value), 'Only public GitHub repository URLs are supported.') });
+const Schema = z.object({
+  url: z
+    .string()
+    .trim()
+    .url()
+    .refine(
+      (value) => /^https:\/\/(www\.)?github\.com\/[^/]+\/[^/]+(?:\.git)?\/?$/.test(value),
+      'Only public GitHub repository URLs are supported.',
+    ),
+});
 
 export async function POST(request: NextRequest) {
   let dir = '';
   try {
+    const auth = await requireAuth(request);
+    if (!auth) return jsonError(401, { code: 'unauthenticated', message: 'Sign in required.' });
+
     const body = Schema.parse(await readJson(request));
     const url = body.url.replace(/\.git\/?$/, '').replace(/\/$/, '') + '.git';
     dir = await mkdtemp(join(tmpdir(), 'wireup-repo-'));
@@ -29,13 +44,34 @@ export async function POST(request: NextRequest) {
     const paths = files.split('\0').filter(Boolean);
     const sample = paths.slice(0, 250).join(', ');
     let readme = '';
-    try { readme = (await readFile(join(dir, 'README.md'), 'utf8')).slice(0, 6000); } catch { /* optional */ }
+    try {
+      readme = (await readFile(join(dir, 'README.md'), 'utf8')).slice(0, 6000);
+    } catch {
+      /* optional */
+    }
     const prompt = `Build Wireup's project-state graph for the imported GitHub repository ${body.url}. Treat the repository as the source of truth: inspect its files, architecture, dependencies, build/test commands, risks, and open work. Imported git snapshot: ${log.trim()}; branch: ${branch.trim() || 'default'}; ${paths.length} tracked files. File sample: ${sample}. README excerpt: ${readme}`;
-    const project = await createProjectRecord({ prompt, name: body.url.split('/').filter(Boolean).pop()?.replace(/\.git$/, '') ?? 'imported-repository', maxIterations: 3 });
+    const project = await createProjectRecord({
+      prompt,
+      name: body.url.split('/').filter(Boolean).pop()?.replace(/\.git$/, '') ?? 'imported-repository',
+      maxIterations: 3,
+      ownerId: auth.user.id,
+      orgId: auth.user.orgId,
+    });
     startGeneration(project.id);
-    return jsonOk({ project, repository: { url: body.url, files: paths.length, commit: log.trim() }, started: true }, { status: 201 });
+    return jsonOk(
+      { project, repository: { url: body.url, files: paths.length, commit: log.trim() }, started: true },
+      { status: 201 },
+    );
   } catch (error) {
-    const message = error instanceof z.ZodError ? error.issues.map((issue) => issue.message).join('; ') : error instanceof Error ? error.message : 'Repository import failed.';
+    if (error instanceof AuthError) {
+      return jsonError(error.status, { code: error.code, message: error.message });
+    }
+    const message =
+      error instanceof z.ZodError
+        ? error.issues.map((issue) => issue.message).join('; ')
+        : error instanceof Error
+          ? error.message
+          : 'Repository import failed.';
     return jsonError(error instanceof z.ZodError ? 400 : 502, { code: 'repository_import_failed', message });
   } finally {
     if (dir) await rm(dir, { recursive: true, force: true }).catch(() => undefined);

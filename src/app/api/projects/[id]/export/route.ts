@@ -1,3 +1,4 @@
+import type { NextRequest } from 'next/server';
 /**
  * GET /api/projects/[id]/export
  *
@@ -14,6 +15,8 @@ import { createZip, type ZipEntry } from '@/lib/zip';
 import { toWokwiDiagram } from '@/modules/diagram-generator/wokwi';
 import type { ProjectState } from '@/types/project';
 import type { WiringEndpoint } from '@/types/wiring';
+import { AuthError, requireAuth } from '@/lib/auth/session';
+import { assertCanRead, assertCanWrite } from '@/lib/auth/project-access';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -266,7 +269,10 @@ function buildEntries(project: ProjectState): { entries: ZipEntry[]; files: stri
   return { entries, files };
 }
 
-export async function GET(_request: Request, context: RouteContext) {
+export async function GET(request: NextRequest, context: RouteContext) {
+  const auth = await requireAuth(request);
+  if (!auth) return jsonError(401, { code: 'unauthenticated', message: 'Sign in required.' });
+
   const { id } = await context.params;
   if (!id || id.trim().length === 0) {
     return jsonError(400, { code: 'bad_request', message: 'A project id is required.' });
@@ -277,6 +283,7 @@ export async function GET(_request: Request, context: RouteContext) {
     if (!project) {
       return jsonError(404, { code: 'not_found', message: `Project ${id} does not exist.` });
     }
+    assertCanRead(project, auth);
 
     const hasArtifacts = Boolean(
       project.artifacts.code ||
@@ -310,6 +317,9 @@ export async function GET(_request: Request, context: RouteContext) {
       },
     });
   } catch (error) {
+    if (error instanceof AuthError) {
+      return jsonError(error.status, { code: error.code, message: error.message });
+    }
     const mapped = fromUnknown(error, `GET /api/projects/${id}/export`);
     return jsonError(mapped.status, mapped.error);
   }

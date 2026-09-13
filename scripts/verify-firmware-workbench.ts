@@ -195,6 +195,9 @@ async function buildProject(): Promise<ProjectState> {
   const now = new Date().toISOString();
   return {
     id: 'workbench-fixture',
+    ownerId: 'local-dev',
+    orgId: null,
+    visibility: 'private' as const,
     name: 'Button LED Toggle',
     prompt: 'a pushbutton that toggles an LED, debounced, non-blocking',
     status: 'completed',

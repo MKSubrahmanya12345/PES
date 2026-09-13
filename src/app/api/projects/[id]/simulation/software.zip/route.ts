@@ -18,6 +18,8 @@ import { getProjectState } from '@/lib/mongodb/projects';
 import { createZip } from '@/lib/zip';
 import { buildSimulationBundle } from '@/modules/simulation';
 import type { SoftwareFinding } from '@/modules/software-generator';
+import { AuthError, requireAuth } from '@/lib/auth/session';
+import { assertCanRead, assertCanWrite } from '@/lib/auth/project-access';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -71,7 +73,10 @@ function validationReport(findings: SoftwareFinding[], passed: boolean, generate
   return lines.join('\n');
 }
 
-export async function GET(_request: NextRequest, context: RouteContext) {
+export async function GET(request: NextRequest, context: RouteContext) {
+  const auth = await requireAuth(request);
+  if (!auth) return jsonError(401, { code: 'unauthenticated', message: 'Sign in required.' });
+
   const { id } = await context.params;
   if (!id || id.trim().length === 0) {
     return jsonError(400, { code: 'bad_request', message: 'A project id is required.' });
@@ -82,6 +87,7 @@ export async function GET(_request: NextRequest, context: RouteContext) {
     if (!project) {
       return jsonError(404, { code: 'not_found', message: `Project ${id} does not exist.` });
     }
+    assertCanRead(project, auth);
 
     const bundle = buildSimulationBundle(project);
     if (!bundle.software) {
@@ -123,6 +129,9 @@ export async function GET(_request: NextRequest, context: RouteContext) {
       },
     });
   } catch (error) {
+    if (error instanceof AuthError) {
+      return jsonError(error.status, { code: error.code, message: error.message });
+    }
     const mapped = fromUnknown(error, `GET /api/projects/${id}/simulation/software.zip`);
     return jsonError(mapped.status, mapped.error);
   }

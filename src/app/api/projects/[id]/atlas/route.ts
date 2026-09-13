@@ -18,6 +18,8 @@ import { nowIso } from '@/lib/validation/time';
 import { isRunning } from '@/modules/orchestrator';
 import { buildProjectAtlas, normalizeAtlasSource, planAtlasTransform, withAtlasTransform } from '@/modules/project-atlas';
 import type { AtlasTargetSpec, ProjectAtlasState } from '@/types/project-atlas';
+import { AuthError, requireAuth } from '@/lib/auth/session';
+import { assertCanRead, assertCanWrite } from '@/lib/auth/project-access';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -80,21 +82,31 @@ function targetOf(target: z.infer<typeof TargetSchema>): AtlasTargetSpec {
   };
 }
 
-export async function GET(_request: NextRequest, context: RouteContext) {
+export async function GET(request: NextRequest, context: RouteContext) {
+  const auth = await requireAuth(request);
+  if (!auth) return jsonError(401, { code: 'unauthenticated', message: 'Sign in required.' });
+
   const { id } = await context.params;
-  if (!id?.trim()) return jsonError(400, { code: 'bad_request', message: 'A project id is required.' });
+  if (!id?.trim()) return jsonError(400, { code: 'badrequest', message: 'A project id is required.' });
 
   try {
     const project = await getProjectState(id.trim());
     if (!project) return jsonError(404, { code: 'not_found', message: `Project ${id} does not exist.` });
+    assertCanRead(project, auth);
     return jsonOk({ atlas: project.atlas ?? null });
   } catch (error) {
+    if (error instanceof AuthError) {
+      return jsonError(error.status, { code: error.code, message: error.message });
+    }
     const mapped = fromUnknown(error, `GET /api/projects/${id}/atlas`);
     return jsonError(mapped.status, mapped.error);
   }
 }
 
 export async function POST(request: NextRequest, context: RouteContext) {
+  const auth = await requireAuth(request);
+  if (!auth) return jsonError(401, { code: 'unauthenticated', message: 'Sign in required.' });
+
   const { id } = await context.params;
   if (!id?.trim()) return jsonError(400, { code: 'bad_request', message: 'A project id is required.' });
 
@@ -102,6 +114,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
     const body = parseBody(BodySchema, await readJson(request));
     const project = await getProjectState(id.trim());
     if (!project) return jsonError(404, { code: 'not_found', message: `Project ${id} does not exist.` });
+    assertCanWrite(project, auth);
     if (isRunning(project.id) || ['pending', 'running', 'validating', 'fixing'].includes(project.status)) {
       return jsonError(409, { code: 'project_busy', message: 'Let the current build finish before indexing a new project source.' });
     }
@@ -169,6 +182,9 @@ export async function POST(request: NextRequest, context: RouteContext) {
     })]);
     return jsonOk({ atlas: nextAtlas, applied: true });
   } catch (error) {
+    if (error instanceof AuthError) {
+      return jsonError(error.status, { code: error.code, message: error.message });
+    }
     const mapped = fromUnknown(error, `POST /api/projects/${id}/atlas`);
     return jsonError(mapped.status, mapped.error);
   }

@@ -28,6 +28,8 @@ import { logger } from '@/lib/logging/logger';
 import { isRunning } from '@/modules/orchestrator';
 import { bedrockSketchEditProvider, llmCodegenEnabled } from '@/modules/code-generator/llm';
 import { runFirmwareChatTurn, applyManualFirmwareEdit } from '@/modules/firmware-chat';
+import { AuthError, requireAuth } from '@/lib/auth/session';
+import { assertCanRead, assertCanWrite } from '@/lib/auth/project-access';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -50,6 +52,9 @@ const BodySchema = z.discriminatedUnion('mode', [
 ]);
 
 export async function POST(request: NextRequest, context: RouteContext) {
+  const auth = await requireAuth(request);
+  if (!auth) return jsonError(401, { code: 'unauthenticated', message: 'Sign in required.' });
+
   const { id } = await context.params;
   if (!id || id.trim().length === 0) {
     return jsonError(400, { code: 'bad_request', message: 'A project id is required.' });
@@ -63,6 +68,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
     if (!project) {
       return jsonError(404, { code: 'not_found', message: `Project ${id} does not exist.` });
     }
+    assertCanWrite(project, auth);
     if (isRunning(project.id) || project.status === 'running' || project.status === 'validating' || project.status === 'fixing') {
       return jsonError(409, { code: 'project_busy', message: 'This project is mid-generation — the workbench unlocks when the run finishes.' });
     }
@@ -121,6 +127,9 @@ export async function POST(request: NextRequest, context: RouteContext) {
     await saveProjectState(project.id, { chat: withMessage.chat }).catch(() => undefined);
     return jsonOk({ message: result.assistantMessage, project: null, diagnostics: result.diagnostics });
   } catch (error) {
+    if (error instanceof AuthError) {
+      return jsonError(error.status, { code: error.code, message: error.message });
+    }
     const mapped = fromUnknown(error, `POST /api/projects/${id}/firmware`);
     logger.error({ err: error, projectId: id }, 'firmware workbench request failed');
     return jsonError(mapped.status, mapped.error);

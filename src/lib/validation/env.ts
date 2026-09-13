@@ -165,6 +165,33 @@ const ServerEnvSchema = z.object({
   // --- Networking ---
   WIREUP_DNS_RESULT_ORDER: optionalString,
 
+  // --- Auth / product ---
+  // Required in production. In development a stable default is derived so
+  // `pnpm dev` works; never ship that default.
+  WIREUP_JWT_SECRET: optionalString,
+  WIREUP_SESSION_TTL_SECONDS: intFrom(60 * 60 * 24 * 14),
+  WIREUP_SESSION_COOKIE: z.string().optional().transform((v) => (v && v.trim() ? v.trim() : 'wireup_session')),
+  // When true (default), every project API requires a signed-in user or API key.
+  // Set false only for offline verify scripts.
+  WIREUP_AUTH_REQUIRED: boolFrom(true),
+  // Bootstrap first admin (optional). Only used when no admin exists yet.
+  WIREUP_BOOTSTRAP_ADMIN_EMAIL: optionalString,
+  WIREUP_BOOTSTRAP_ADMIN_PASSWORD: optionalString,
+  // Rate limits
+  WIREUP_RATE_LIMIT_AUTH_PER_MIN: intFrom(20),
+  WIREUP_RATE_LIMIT_PROJECT_PER_MIN: intFrom(30),
+  // Public app URL (emails, redirects, iframe ancestors)
+  WIREUP_PUBLIC_URL: optionalString,
+  // Hosted simulator (Velxio). Empty = serve built-in dashboard preview only.
+  WIREUP_VELXIO_URL: optionalString,
+  WIREUP_WEBSITE_URL: optionalString,
+  WIREUP_SIM_DEFAULT_VIEW: optionalString,
+  // Stripe (optional — billing hooks activate when set)
+  STRIPE_SECRET_KEY: optionalString,
+  STRIPE_WEBHOOK_SECRET: optionalString,
+  STRIPE_PRICE_PRO: optionalString,
+  STRIPE_PRICE_TEAM: optionalString,
+
   NODE_ENV: z.string().optional().transform((v) => v ?? 'development'),
 });
 
@@ -234,6 +261,28 @@ export interface ServerEnv {
   };
   net: {
     dnsResultOrder: DnsResultOrder;
+  };
+  auth: {
+    jwtSecret: string;
+    sessionTtlSeconds: number;
+    cookieName: string;
+    required: boolean;
+    bootstrapAdminEmail?: string;
+    bootstrapAdminPassword?: string;
+    rateLimitAuthPerMin: number;
+    rateLimitProjectPerMin: number;
+    publicUrl?: string;
+  };
+  simulation: {
+    velxioUrl?: string;
+    websiteUrl?: string;
+    defaultView: 'simulation' | 'website';
+  };
+  billing: {
+    stripeSecretKey?: string;
+    stripeWebhookSecret?: string;
+    pricePro?: string;
+    priceTeam?: string;
   };
   nodeEnv: string;
 }
@@ -328,13 +377,47 @@ function read(): ServerEnv {
     net: {
       dnsResultOrder: parseDnsResultOrder(parsed.WIREUP_DNS_RESULT_ORDER),
     },
+    auth: {
+      jwtSecret:
+        parsed.WIREUP_JWT_SECRET ??
+        (parsed.NODE_ENV === 'production'
+          ? ''
+          : 'wireup-dev-only-jwt-secret-change-me-in-production-32b'),
+      sessionTtlSeconds: Math.max(300, parsed.WIREUP_SESSION_TTL_SECONDS),
+      cookieName: parsed.WIREUP_SESSION_COOKIE ?? 'wireup_session',
+      required: parsed.WIREUP_AUTH_REQUIRED,
+      bootstrapAdminEmail: parsed.WIREUP_BOOTSTRAP_ADMIN_EMAIL,
+      bootstrapAdminPassword: parsed.WIREUP_BOOTSTRAP_ADMIN_PASSWORD,
+      rateLimitAuthPerMin: Math.max(5, parsed.WIREUP_RATE_LIMIT_AUTH_PER_MIN),
+      rateLimitProjectPerMin: Math.max(5, parsed.WIREUP_RATE_LIMIT_PROJECT_PER_MIN),
+      publicUrl: parsed.WIREUP_PUBLIC_URL,
+    },
+    simulation: {
+      velxioUrl: parsed.WIREUP_VELXIO_URL,
+      websiteUrl: parsed.WIREUP_WEBSITE_URL,
+      defaultView: (parsed.WIREUP_SIM_DEFAULT_VIEW ?? '').toLowerCase() === 'website' ? 'website' : 'simulation',
+    },
+    billing: {
+      stripeSecretKey: parsed.STRIPE_SECRET_KEY,
+      stripeWebhookSecret: parsed.STRIPE_WEBHOOK_SECRET,
+      pricePro: parsed.STRIPE_PRICE_PRO,
+      priceTeam: parsed.STRIPE_PRICE_TEAM,
+    },
     nodeEnv: parsed.NODE_ENV ?? 'development',
   };
 }
 
 /** Cached, validated server environment. */
 export function env(): ServerEnv {
-  if (!cached) cached = read();
+  if (!cached) {
+    cached = read();
+    if (cached.nodeEnv === 'production' && (!cached.auth.jwtSecret || cached.auth.jwtSecret.length < 32)) {
+      throw new EnvError(
+        ['WIREUP_JWT_SECRET'],
+        'Production requires WIREUP_JWT_SECRET (≥32 chars). Refusing to boot with a weak/missing secret.',
+      );
+    }
+  }
   return cached;
 }
 

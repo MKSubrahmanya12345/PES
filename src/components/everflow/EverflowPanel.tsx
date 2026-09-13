@@ -35,6 +35,7 @@ import {
   researchEverflowNode,
   respondToEverflowTask,
   type EverflowPayload,
+  createEverflowInjection,
 } from '@/components/workspace/api';
 
 import { BriefLines } from './BriefLines';

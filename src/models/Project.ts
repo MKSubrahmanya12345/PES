@@ -31,6 +31,10 @@ import type { PinAssignment, WiringPlan } from '@/types/wiring';
 
 export interface ProjectDocument {
   _id: Types.ObjectId;
+  /** Owning user id — required for multi-tenant isolation. */
+  ownerId: string;
+  orgId: string | null;
+  visibility: 'private' | 'unlisted' | 'public';
   prompt: string;
   name: string;
   status: ProjectStatus;
@@ -76,6 +80,9 @@ const Mixed = mongoose.Schema.Types.Mixed;
 
 const ProjectSchema = new mongoose.Schema(
   {
+    ownerId: { type: String, required: true, index: true },
+    orgId: { type: String, default: null, index: true },
+    visibility: { type: String, enum: ['private', 'unlisted', 'public'], default: 'private' },
     prompt: { type: String, required: true },
     name: { type: String, required: true, default: 'Untitled project' },
     status: {
@@ -139,6 +146,8 @@ const ProjectSchema = new mongoose.Schema(
 
 ProjectSchema.index({ createdAt: -1 });
 ProjectSchema.index({ status: 1, updatedAt: 1 });
+ProjectSchema.index({ ownerId: 1, createdAt: -1 });
+ProjectSchema.index({ ownerId: 1, status: 1 });
 
 export function getProjectModel(): Model<ProjectDocument> {
   return (mongoose.models.Project as Model<ProjectDocument>) || mongoose.model<ProjectDocument>('Project', ProjectSchema);

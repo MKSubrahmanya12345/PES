@@ -1,12 +1,14 @@
 /**
- * GET /api/projects/[id] — the full project state (all artifacts, revisions,
- * validation results and the event log) for the workspace UI.
+ * GET /api/projects/[id] — full project state (owner-scoped).
+ * DELETE /api/projects/[id] — owner delete.
  */
 
 import type { NextRequest } from 'next/server';
 
+import { AuthError, requireAuth } from '@/lib/auth/session';
+import { assertCanRead, assertCanWrite } from '@/lib/auth/project-access';
 import { fromUnknown, jsonError, jsonOk } from '@/lib/http';
-import { getProjectState } from '@/lib/mongodb/projects';
+import { deleteProject, getProjectState } from '@/lib/mongodb/projects';
 import { isRunning } from '@/modules/orchestrator';
 import { recoverStalledProject } from '@/modules/orchestrator/recovery';
 
@@ -25,19 +27,50 @@ export async function GET(_request: NextRequest, context: RouteContext) {
   }
 
   try {
+    const auth = await requireAuth(_request);
+    if (!auth) return jsonError(401, { code: 'unauthenticated', message: 'Sign in required.' });
+
     let project = await getProjectState(id.trim());
     if (!project) {
       return jsonError(404, { code: 'not_found', message: `Project ${id} does not exist.` });
     }
 
-    // A run whose owning process disappeared (restart/crash) must not leave the
-    // UI polling forever: explain it and move the project to a terminal state.
+    assertCanRead(project, auth);
+
     const recovered = await recoverStalledProject(project);
     if (recovered) project = recovered;
 
     return jsonOk({ project, running: isRunning(project.id) });
   } catch (error) {
+    if (error instanceof AuthError) {
+      return jsonError(error.status, { code: error.code, message: error.message });
+    }
     const mapped = fromUnknown(error, `GET /api/projects/${id}`);
+    return jsonError(mapped.status, mapped.error);
+  }
+}
+
+export async function DELETE(request: NextRequest, context: RouteContext) {
+  const { id } = await context.params;
+  if (!id?.trim()) {
+    return jsonError(400, { code: 'bad_request', message: 'A project id is required.' });
+  }
+  try {
+    const auth = await requireAuth(request);
+    if (!auth) return jsonError(401, { code: 'unauthenticated', message: 'Sign in required.' });
+    const project = await getProjectState(id.trim());
+    if (!project) return jsonError(404, { code: 'not_found', message: `Project ${id} does not exist.` });
+    assertCanWrite(project, auth);
+    if (isRunning(project.id)) {
+      return jsonError(409, { code: 'running', message: 'Cannot delete a project while a build is running.' });
+    }
+    const ok = await deleteProject(project.id);
+    return jsonOk({ deleted: ok });
+  } catch (error) {
+    if (error instanceof AuthError) {
+      return jsonError(error.status, { code: error.code, message: error.message });
+    }
+    const mapped = fromUnknown(error, `DELETE /api/projects/${id}`);
     return jsonError(mapped.status, mapped.error);
   }
 }

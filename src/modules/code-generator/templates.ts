@@ -16,8 +16,7 @@ import type { McuProfile } from '@/modules/pin-planner/mcu-profiles';
 /* Machine-managed blocks + shared primitives (see ./managed-blocks)          */
 /* ------------------------------------------------------------------------- */
 
-import { buildAccessControlSketch, detectAccessControl } from './behaviours/access-control';
-import { buildLineFollowerSketch, detectLineFollower } from './behaviours/line-follower';
+import { resolveExclusiveBehaviour } from './behaviours/registry';
 import {
   buildIncludesBlock,
   buildPinMapBlock,
@@ -142,24 +141,13 @@ export function wantsResetBrief(brief: string): boolean {
 /** Generate a complete Arduino sketch from the structured project data. */
 export function generateSketch(ctx: SketchContext): string {
   /*
-   * Behaviour first: when the build is an access-control device (a key input
-   * plus something that locks), the generic movement/telemetry skeleton below
-   * would compile happily and do none of what was asked — it counted button
-   * presses on a project that was supposed to check a PIN and drive a bolt.
+   * Behaviour registry first: exclusive product classes (access control, line
+   * follower, plant monitor, motion alarm, telemetry station, …) own the
+   * sketch when they match. Adding a class is one detector + builder file —
+   * not another fork of this template.
    */
-  const accessControl = detectAccessControl(ctx);
-  if (accessControl) return buildAccessControlSketch(ctx, accessControl);
-
-  /*
-   * Next: line followers. The generic skeleton below wires a robot's drive
-   * channels and then never reads the track sensors together with them — the
-   * robot could not follow anything. Detection is structural (two reflectance
-   * sensors + a two-channel H-bridge), and it hands the build back here when
-   * the pin plan carries anything it cannot drive, so no assigned pin is ever
-   * left undriven by this dispatch.
-   */
-  const lineFollower = detectLineFollower(ctx);
-  if (lineFollower) return buildLineFollowerSketch(ctx, lineFollower);
+  const specialised = resolveExclusiveBehaviour(ctx);
+  if (specialised?.build) return specialised.build(ctx);
 
   const lines: string[] = [];
   const platformIsEsp32 = /esp32/i.test(ctx.controllerName);

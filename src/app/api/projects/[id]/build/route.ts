@@ -26,6 +26,8 @@ import { createId } from '@/lib/validation/ids';
 import { nowIso } from '@/lib/validation/time';
 import { buildIntakeContext } from '@/modules/everflow';
 import { isRunning, startGeneration } from '@/modules/orchestrator';
+import { AuthError, requireAuth } from '@/lib/auth/session';
+import { assertCanRead, assertCanWrite } from '@/lib/auth/project-access';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -39,11 +41,16 @@ const BodySchema = z
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
+    const auth = await requireAuth(request);
+    if (!auth) return jsonError(401, { code: 'unauthenticated', message: 'Sign in required.' });
+
     const { id } = await params;
     const body = await readJson(request);
     const parsed = parseBody(BodySchema, body);
 
     const state = await getProjectState(id);
+    if (!state) return jsonError(404, { code: 'not_found', message: 'Project not found.' });
+    assertCanWrite(state, auth);
     if (!state) return jsonError(404, { code: 'not_found', message: 'Project not found.' });
     if (isRunning(id)) {
       return jsonError(409, { code: 'already_running', message: 'A build is already running for this project.' });

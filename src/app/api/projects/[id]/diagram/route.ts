@@ -12,6 +12,8 @@ import type { NextRequest } from 'next/server';
 import { fromUnknown, jsonError, jsonOk } from '@/lib/http';
 import { getProjectState } from '@/lib/mongodb/projects';
 import { toWokwiDiagram } from '@/modules/diagram-generator/wokwi';
+import { AuthError, requireAuth } from '@/lib/auth/session';
+import { assertCanRead, assertCanWrite } from '@/lib/auth/project-access';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -22,6 +24,9 @@ interface RouteContext {
 }
 
 export async function GET(request: NextRequest, context: RouteContext) {
+  const auth = await requireAuth(request);
+  if (!auth) return jsonError(401, { code: 'unauthenticated', message: 'Sign in required.' });
+
   const { id } = await context.params;
   // A file called diagram.json must be loadable by Wokwi by default. Callers
   // that need the richer internal graph must opt into target=wireup.
@@ -42,6 +47,7 @@ export async function GET(request: NextRequest, context: RouteContext) {
     if (!project) {
       return jsonError(404, { code: 'not_found', message: `Project ${id} does not exist.` });
     }
+    assertCanRead(project, auth);
 
     const diagram = project.artifacts.diagram;
     if (!diagram) {
@@ -68,6 +74,9 @@ export async function GET(request: NextRequest, context: RouteContext) {
 
     return jsonOk({ target: 'wireup', projectId: project.id, revision: project.revision, diagram });
   } catch (error) {
+    if (error instanceof AuthError) {
+      return jsonError(error.status, { code: error.code, message: error.message });
+    }
     const mapped = fromUnknown(error, `GET /api/projects/${id}/diagram`);
     return jsonError(mapped.status, mapped.error);
   }

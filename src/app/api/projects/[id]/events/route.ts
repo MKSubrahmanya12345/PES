@@ -1,16 +1,14 @@
 /**
  * GET /api/projects/[id]/events?after=<seq>
- *
- * The polling endpoint behind the live agent console. `after` is the highest
- * event seq the client already has, so each poll only ships new lines. The
- * response also carries status/stage/revision so the client knows when the run
- * finished and must refetch the full project.
+ * Auth + ownership required.
  */
 
 import type { NextRequest } from 'next/server';
 
+import { AuthError, requireAuth } from '@/lib/auth/session';
+import { assertCanRead } from '@/lib/auth/project-access';
 import { fromUnknown, jsonError, jsonOk } from '@/lib/http';
-import { getProjectEvents } from '@/lib/mongodb/projects';
+import { getProjectEvents, getProjectState } from '@/lib/mongodb/projects';
 import { isRunning } from '@/modules/orchestrator';
 import { recoverStalledProject } from '@/modules/orchestrator/recovery';
 
@@ -30,18 +28,25 @@ export async function GET(request: NextRequest, context: RouteContext) {
     return jsonError(400, { code: 'bad_request', message: 'A project id is required.' });
   }
 
-  const rawAfter = request.nextUrl.searchParams.get('after') ?? '0';
-  const parsedAfter = Number.parseInt(rawAfter, 10);
-  const after = Number.isFinite(parsedAfter) && parsedAfter > 0 ? parsedAfter : 0;
-
   try {
+    const auth = await requireAuth(request);
+    if (!auth) return jsonError(401, { code: 'unauthenticated', message: 'Sign in required.' });
+
+    const project = await getProjectState(id.trim());
+    if (!project) {
+      return jsonError(404, { code: 'not_found', message: `Project ${id} does not exist.` });
+    }
+    assertCanRead(project, auth);
+
+    const rawAfter = request.nextUrl.searchParams.get('after') ?? '0';
+    const parsedAfter = Number.parseInt(rawAfter, 10);
+    const after = Number.isFinite(parsedAfter) && parsedAfter > 0 ? parsedAfter : 0;
+
     let result = await getProjectEvents(id.trim(), after);
     if (!result) {
       return jsonError(404, { code: 'not_found', message: `Project ${id} does not exist.` });
     }
 
-    // Recover runs whose owning process disappeared, then re-read so the
-    // recovery event itself reaches the console on this same poll.
     const recovered = await recoverStalledProject({
       id: id.trim(),
       status: result.status,
@@ -65,6 +70,9 @@ export async function GET(request: NextRequest, context: RouteContext) {
       terminal: TERMINAL_STATUSES.has(result.status),
     });
   } catch (error) {
+    if (error instanceof AuthError) {
+      return jsonError(error.status, { code: error.code, message: error.message });
+    }
     const mapped = fromUnknown(error, `GET /api/projects/${id}/events`);
     return jsonError(mapped.status, mapped.error);
   }

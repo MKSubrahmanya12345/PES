@@ -90,6 +90,9 @@ function baseProject(overrides: Partial<ProjectState> = {}): ProjectState {
   const now = nowIso();
   return {
     id: 'evf-verify',
+    ownerId: 'local-dev',
+    orgId: null,
+    visibility: 'private' as const,
     name: 'Verify Car',
     prompt: PROMPT,
     status: 'completed',

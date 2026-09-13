@@ -2,7 +2,7 @@
   "name": "wireup",
   "version": "0.1.0",
   "private": true,
-  "description": "Wireup \u2014 agentic hardware engineering platform that turns a prompt into a validated, simulator-ready embedded project.",
+  "description": "Wireup \u2014 multi-tenant hardware engineering platform: prompt \u2192 validated BOM, pins, firmware, hosted dashboard. Accounts, plans, metering.",
   "packageManager": "pnpm@9.15.4",
   "engines": {
     "node": ">=20.11.0",
@@ -38,11 +38,15 @@
     "verify:contracts": "tsx scripts/verify-contracts.ts",
     "verify:idea-graph": "tsx scripts/verify-idea-graph.ts",
     "verify:atlas": "tsx scripts/verify-project-atlas.ts",
-    "verify:quantities": "tsx scripts/verify-quantity-delivery.ts"
+    "verify:quantities": "tsx scripts/verify-quantity-delivery.ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@aws-sdk/client-bedrock-runtime": "^3.699.0",
     "@types/three": "^0.185.4",
+    "bcryptjs": "^3.0.3",
+    "jose": "^6.2.12",
     "mongoose": "^8.9.5",
     "next": "^15.1.6",
     "react": "^19.0.0",
@@ -51,10 +55,12 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
     "@types/node": "^22.10.7",
     "@types/react": "^19.0.7",
     "@types/react-dom": "^19.0.3",
     "tsx": "^4.19.2",
-    "typescript": "^5.7.3"
+    "typescript": "^5.7.3",
+    "vitest": "^5.0.0"
   }
 }

@@ -51,6 +51,9 @@ export function initialProject(id: string, prompt: string): ProjectState {
   const now = nowIso();
   return {
     id,
+    ownerId: 'local-dev',
+    orgId: null,
+    visibility: 'private',
     name: 'Untitled project',
     prompt,
     status: 'pending',

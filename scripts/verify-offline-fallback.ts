@@ -64,6 +64,9 @@ function initialProject(prompt: string): ProjectState {
   const now = nowIso();
   return {
     id: 'verify-offline',
+    ownerId: 'local-dev',
+    orgId: null,
+    visibility: 'private' as const,
     name: 'Untitled project',
     prompt,
     status: 'pending',

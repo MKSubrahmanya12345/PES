@@ -1,34 +1,15 @@
 'use client';
 
 /**
- * SIMULATION — the two halves of a build, one toggle.
+ * SIMULATION — two halves, product-ready defaults.
  *
- *   ⚡ Simulation — the Velxio emulator you run at localhost:5174, embedded.
- *                  This build's circuit and firmware land on the canvas the
- *                  moment the iframe reports ready: no manual .vlx import.
- *                  Canvas edits can be pulled back into this project's
- *                  diagram.json, as a revision.
+ *   ⚡ Simulation — hosted Velxio when WIREUP_VELXIO_URL is set; otherwise a
+ *                  clear setup state (no pretend localhost for end users).
+ *   🖥 Website    — hosted dashboard preview served by Wireup itself
+ *                  (/api/projects/:id/simulation/dashboard). Zip download
+ *                  still available for Web Serial on real hardware.
  *
- *   🖥 Website    — the dashboard this build generated, running from the zip
- *                  you unzipped at localhost:5175. It is the real generated
- *                  bundle, served by your own dev server.
- *
- * ── The part that makes it not a demo ───────────────────────────────────────
- * This page is the RELAY between them. Both iframes are cross-origin to each
- * other, so they cannot talk directly; this page can talk to both, and it
- * pumps bytes across:
- *
- *   Velxio  --serial-data-->  this page  --wireup:serial-data-->  Dashboard
- *   Velxio  <--serial-write-- this page  <--wireup:dash-write---  Dashboard
- *
- * The bytes are the firmware's actual UART output and the dashboard's actual
- * command characters. Nothing in the loop is synthesised: turn the emulator
- * off and the dashboard's cards stop updating, because there is nothing left
- * to update them.
- *
- * Both iframes are the user's own localhost services. Wireup's server never
- * fetches them — it cannot reach the user's machine — so everything here is
- * browser-side by necessity as well as by design.
+ * This page relays serial bytes between the halves when both are live.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -357,16 +338,24 @@ function SimulationHalf({
           />
           {status.state === 'waiting' ? (
             <div className="sim__overlay">
-              <strong>Waiting for Velxio at {velxioUrl}</strong>
+              <strong>
+                {payload.config.velxioHosted
+                  ? `Connecting to hosted emulator at ${velxioUrl}`
+                  : `Waiting for emulator at ${velxioUrl}`}
+              </strong>
               <p className="faint">
-                Start it with <code>cd external/velxio/frontend &amp;&amp; npm install &amp;&amp; npm run dev</code>. The
-                embed bridge is already vendored in this repo — no patch to apply.
+                {payload.config.velxioHosted
+                  ? 'Your workspace is configured with a hosted Velxio URL. If this hangs, check WIREUP_VELXIO_URL and frame-ancestors on that host.'
+                  : 'Dev fallback: start local Velxio (`cd external/velxio/frontend && npm run dev`) or set WIREUP_VELXIO_URL to your hosted emulator for production.'}
               </p>
             </div>
           ) : null}
         </div>
       ) : (
-        <Empty>No emulator URL is configured.</Empty>
+        <Empty>
+          No emulator URL configured. Set <code>WIREUP_VELXIO_URL</code> to your hosted Velxio deployment. The
+          dashboard half still works without it.
+        </Empty>
       )}
 
       {details && velxio ? (
@@ -408,10 +397,16 @@ function WebsiteHalf({
     <>
       <div className="sim__head">
         <div>
-          <SectionTitle>Generated dashboard — your dev server at {websiteUrl}</SectionTitle>
+          <SectionTitle>
+            {payload.config.dashboardHosted
+              ? 'Hosted dashboard preview'
+              : `Generated dashboard — ${websiteUrl}`}
+          </SectionTitle>
           <p className="faint">
             {software
-              ? `${software.files.length} file(s), ${Math.round(bytes / 1024)} kB of source. Generated and statically checked — never installed or built by Wireup.`
+              ? payload.config.dashboardHosted
+                ? `${software.files.length} file(s) generated. Live preview is served by Wireup — download the zip for Web Serial on real hardware.`
+                : `${software.files.length} file(s), ${Math.round(bytes / 1024)} kB of source.`
               : payload.blocked.software}
           </p>
         </div>
@@ -466,11 +461,15 @@ function WebsiteHalf({
           <iframe ref={frameRef} className="sim__frame" src={websiteUrl} title="Generated dashboard" />
           {!attached ? (
             <div className="sim__overlay">
-              <strong>Waiting for the dashboard at {websiteUrl}</strong>
+              <strong>
+                {payload.config.dashboardHosted
+                  ? 'Loading hosted dashboard…'
+                  : `Waiting for dashboard at ${websiteUrl}`}
+              </strong>
               <p className="faint">
-                Download the zip above, then <code>npm install &amp;&amp; npm run dev</code> in the unzipped folder. It
-                binds port 5175 and attaches to this page automatically — the emulator's serial output starts
-                flowing into it the moment it does.
+                {payload.config.dashboardHosted
+                  ? 'Wireup serves this preview. Serial link attaches automatically when the Simulation half is live.'
+                  : 'Start the external dashboard host, or clear WIREUP_WEBSITE_URL to use the built-in preview.'}
               </p>
             </div>
           ) : null}

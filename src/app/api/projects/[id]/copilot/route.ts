@@ -31,6 +31,8 @@ import {
   type HardwareEditPlan,
   type HardwareEditPreview,
 } from '@/modules/hardware-copilot';
+import { AuthError, requireAuth } from '@/lib/auth/session';
+import { assertCanWrite } from '@/lib/auth/project-access';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -129,6 +131,8 @@ function statusFor(passed: boolean, warnings: number): 'completed' | 'completed_
 }
 
 export async function POST(request: NextRequest, context: RouteContext) {
+  const auth = await requireAuth(request);
+  if (!auth) return jsonError(401, { code: 'unauthenticated', message: 'Sign in required.' });
   const { id } = await context.params;
   if (!id || id.trim().length === 0) return jsonError(400, { code: 'bad_request', message: 'A project id is required.' });
 
@@ -136,6 +140,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
     const body = parseBody(BodySchema, await readJson(request));
     const project = await getProjectState(id.trim());
     if (!project) return jsonError(404, { code: 'not_found', message: `Project ${id} does not exist.` });
+    assertCanWrite(project, auth);
     if (isRunning(project.id) || ['running', 'validating', 'fixing'].includes(project.status)) {
       return jsonError(409, { code: 'project_busy', message: 'The project is still running. The copilot unlocks when the current build finishes.' });
     }
@@ -237,6 +242,9 @@ export async function POST(request: NextRequest, context: RouteContext) {
 
     return jsonOk({ applied: true, plan, project: saved });
   } catch (error) {
+    if (error instanceof AuthError) {
+      return jsonError(error.status, { code: error.code, message: error.message });
+    }
     if (error instanceof BadRequestError) return jsonError(400, { code: 'bad_request', message: error.message, details: error.issues.join('; ') });
     const mapped = fromUnknown(error, `POST /api/projects/${id}/copilot`);
     return jsonError(mapped.status, mapped.error);

@@ -60,6 +60,9 @@ export function serializeProject(raw: RawProject): ProjectState {
 
   return {
     id,
+    ownerId: typeof (raw as { ownerId?: string }).ownerId === 'string' ? (raw as { ownerId: string }).ownerId : '',
+    orgId: typeof (raw as { orgId?: string | null }).orgId === 'string' ? (raw as { orgId: string }).orgId : null,
+    visibility: ((raw as { visibility?: string }).visibility as 'private' | 'unlisted' | 'public' | undefined) ?? 'private',
     name: raw.name ?? 'Untitled project',
     prompt: raw.prompt ?? '',
     status: (raw.status ?? 'pending') as ProjectStatus,
@@ -101,6 +104,10 @@ export interface CreateProjectInput {
   prompt: string;
   name?: string;
   maxIterations?: number;
+  /** Owning user id. Required in product mode; defaults to local-dev for offline harnesses. */
+  ownerId?: string;
+  orgId?: string | null;
+  visibility?: 'private' | 'unlisted' | 'public';
   /** Replaces the default "generation queued" first event message (used by the in-memory store to state its mode). */
   notice?: string;
   /** Extra metadata on the first event (e.g. `{ store: 'memory' }`). */
@@ -128,6 +135,9 @@ export async function createProjectRecord(input: CreateProjectInput): Promise<Pr
       input.notice
         ?? 'Project created on the IN-MEMORY store — MONGODB_URI is not configured, so this project lives in this process only and is lost when the server restarts. Set MONGODB_URI in .env for persistent storage.';
     const doc = memoryCreateProject({
+      ownerId: input.ownerId ?? 'local-dev',
+      orgId: input.orgId ?? null,
+      visibility: input.visibility ?? 'private',
       prompt: input.prompt,
       name: input.name ?? 'Untitled project',
       status: 'pending',
@@ -162,6 +172,9 @@ export async function createProjectRecord(input: CreateProjectInput): Promise<Pr
   const Project = getProjectModel();
 
   const doc = await Project.create({
+    ownerId: input.ownerId ?? 'local-dev',
+    orgId: input.orgId ?? null,
+    visibility: input.visibility ?? 'private',
     prompt: input.prompt,
     name: input.name ?? 'Untitled project',
     status: 'pending',
@@ -205,14 +218,40 @@ export async function getProjectState(id: string): Promise<ProjectState | null> 
   return serializeProject(raw);
 }
 
-export async function listProjectStates(limit = 25): Promise<ProjectState[]> {
+export async function listProjectStates(limit = 25, ownerId?: string): Promise<ProjectState[]> {
   if (useMemoryStore()) {
-    return memoryListProjects(limit).map((raw) => serializeProject(raw as RawProject));
+    const all = memoryListProjects(Math.max(limit * 4, 50)).map((raw) => serializeProject(raw as RawProject));
+    const filtered = ownerId ? all.filter((p) => p.ownerId === ownerId) : all;
+    return filtered.slice(0, limit);
   }
   await connectMongo();
   const Project = getProjectModel();
-  const docs = (await Project.find({}).sort({ createdAt: -1 }).limit(limit).lean()) as RawProject[];
+  const filter = ownerId ? { ownerId } : {};
+  const docs = (await Project.find(filter).sort({ createdAt: -1 }).limit(limit).lean()) as RawProject[];
   return docs.map(serializeProject);
+}
+
+/** Count projects owned by a user (storage quota). */
+export async function countProjectsForOwner(ownerId: string): Promise<number> {
+  if (useMemoryStore()) {
+    return memoryListProjects(10_000).filter((raw) => String((raw as { ownerId?: string }).ownerId ?? '') === ownerId).length;
+  }
+  await connectMongo();
+  const Project = getProjectModel();
+  return Project.countDocuments({ ownerId });
+}
+
+/** Count in-flight runs for concurrency metering. */
+export async function countRunningForOwner(ownerId: string): Promise<number> {
+  const active = ['pending', 'running', 'validating', 'fixing', 'intake'];
+  if (useMemoryStore()) {
+    return memoryListProjects(10_000).filter(
+      (raw) => String((raw as { ownerId?: string }).ownerId ?? '') === ownerId && active.includes(String(raw.status)),
+    ).length;
+  }
+  await connectMongo();
+  const Project = getProjectModel();
+  return Project.countDocuments({ ownerId, status: { $in: active } });
 }
 
 export async function saveProjectState(id: string, patch: ProjectPatch): Promise<ProjectState | null> {

@@ -1,13 +1,13 @@
+'use client';
+
 import Link from 'next/link';
 
 import { PromptForm } from '@/components/PromptForm';
-import { env } from '@/lib/validation/env';
-
-export const dynamic = 'force-dynamic';
+import { useAuth } from '@/components/auth/AuthProvider';
 
 export default function HomePage() {
-  // State the store mode loudly: a demo that forgets persistence is a lie.
-  const memoryStore = env().store.mode === 'memory';
+  const { loading, authenticated, user, plan, usage, signOut } = useAuth();
+
   return (
     <>
       <header className="topbar">
@@ -16,77 +16,85 @@ export default function HomePage() {
           <span>Wireup</span>
         </Link>
         <span className="topbar__spacer" />
-        <Link
-          href="/admin"
-          className="btn btn--sm"
-          style={{
-            marginRight: 14,
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 6,
-            fontWeight: 600,
-            background: 'var(--bg-sunken)',
-            border: '1px solid var(--border-strong)',
-            color: 'var(--text)',
-            padding: '4px 12px',
-          }}
-        >
-          <span style={{ fontSize: 13 }}>⚙</span>
-          <span>Admin Login</span>
+        <Link href="/pricing" className="btn btn--sm" style={{ marginRight: 8 }}>
+          Pricing
         </Link>
-        <span className="topbar__meta topbar__meta--landing">engineering copilot / ready</span>
+        {!loading && authenticated && user ? (
+          <>
+            <Link href="/account" className="btn btn--sm" style={{ marginRight: 8 }}>
+              {user.name.split(' ')[0]} · {plan?.name ?? user.plan}
+            </Link>
+            {user.role === 'admin' ? (
+              <Link href="/admin" className="btn btn--sm" style={{ marginRight: 8 }}>
+                Admin
+              </Link>
+            ) : null}
+            <button type="button" className="btn btn--sm" onClick={() => void signOut()}>
+              Sign out
+            </button>
+          </>
+        ) : (
+          <>
+            <Link href="/login" className="btn btn--sm" style={{ marginRight: 8 }}>
+              Sign in
+            </Link>
+            <Link href="/register" className="btn btn--sm btn--primary">
+              Start free
+            </Link>
+          </>
+        )}
       </header>
 
       <main className="landing">
         <div className="landing__inner">
-          {memoryStore ? (
-            <div
-              className="store-banner"
-              style={{
-                border: '1px solid var(--border-strong)',
-                background: 'var(--bg-sunken)',
-                borderRadius: 10,
-                padding: '10px 14px',
-                marginBottom: 18,
-                fontSize: 13.5,
-                lineHeight: 1.45,
-              }}
-            >
-              <strong>Dev mode — in-memory store.</strong> <code>MONGODB_URI</code> is not set, so projects live in
-              this server process and are <em>lost on restart</em>. Everything else works: the doubt session, the
-              build, the idea graph and both human channels. Set <code>MONGODB_URI</code> in <code>.env</code> for
-              persistent storage.
+          {authenticated && usage && plan ? (
+            <div className="store-banner" style={{ marginBottom: 18 }}>
+              <strong>{plan.name} plan</strong> — {usage.projectsThisMonth} project(s) this month
+              {typeof (plan as { projectsPerMonth?: number }).projectsPerMonth === 'number'
+                ? ` / ${(plan as { projectsPerMonth: number }).projectsPerMonth}`
+                : ''}
+              . Hosted dashboard preview included.
             </div>
           ) : null}
+
+          {!loading && !authenticated ? (
+            <div className="store-banner" style={{ marginBottom: 18 }}>
+              <strong>Sign in to build.</strong> Projects are private to your account, metered by plan, and
+              exportable anytime.{' '}
+              <Link href="/register">Create a free account</Link> or <Link href="/login">sign in</Link>.
+            </div>
+          ) : null}
+
           <div className="landing__beacon" aria-hidden="true">
             <span className="landing__beacon-orbit landing__beacon-orbit--outer" />
             <span className="landing__beacon-orbit landing__beacon-orbit--inner" />
             <span className="landing__beacon-core">W</span>
-            <span className="landing__beacon-label">idea / signal / build</span>
+            <span className="landing__beacon-label">brief / build / ship</span>
           </div>
           <div className="landing__signal" aria-hidden="true">
             <span className="landing__signal-line" />
-            <span>bench 01 / intake</span>
+            <span>hardware engineering workspace</span>
             <span className="landing__signal-line landing__signal-line--short" />
           </div>
-          <p className="landing__eyebrow">BRIEF / DOUBTS / GRAPH / BUILD / EVERFLOW</p>
-          <h1 className="landing__title">From "what if?" to wires on the bench.</h1>
+          <p className="landing__eyebrow">PROMPT → BOM → PINS → FIRMWARE → HOSTED PREVIEW</p>
+          <h1 className="landing__title">From messy idea to wires you can trust.</h1>
           <p className="landing__subtitle">
-            Give Wireup the messy version of your hardware idea. It settles the open questions with you, builds a
-            grounded plan with real parts, power, pins and firmware — then keeps iterating on the project graph
-            until every goal is met.
+            Describe the device. Wireup picks real parts, assigns legal pins, writes firmware that matches the
+            wiring graph, validates it, and opens a hosted dashboard — under your account, on a real plan.
           </p>
 
           <div className="landing__form-label">
-            <span>Tell the bench what you're making</span>
-            <span className="landing__form-label-detail">one brief in · questions settled · a living project out</span>
+            <span>Tell the bench what you&apos;re making</span>
+            <span className="landing__form-label-detail">
+              {authenticated ? 'one brief in · owned project out' : 'sign in required to create projects'}
+            </span>
           </div>
-          <PromptForm />
+          <PromptForm requireAuth={!authenticated && !loading} />
 
           <div className="landing__proof">
             <span className="landing__proof-mark" aria-hidden="true" />
             <p className="landing__note">
-              A fresh project every time. No account, no recycled plans, no black box between the brief and the bench.
+              Multi-tenant by default. No shared anonymous bucket. Admin is a real role — not admin123.
             </p>
           </div>
         </div>

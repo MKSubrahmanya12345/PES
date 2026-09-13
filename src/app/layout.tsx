@@ -1,12 +1,14 @@
 import type { Metadata, Viewport } from 'next';
 
+import { AuthProvider } from '@/components/auth/AuthProvider';
+
 import './globals.css';
 import './control-plane.css';
 
 export const metadata: Metadata = {
-  title: 'Wireup — human-directed intelligence workspace',
+  title: 'Wireup — prompt to validated hardware project',
   description:
-    'Wireup turns messy goals into editable decision graphs with doubts, evidence, named real-world stakes and human approval gates — plus a grounded hardware engineering pipeline.',
+    'Wireup turns a hardware idea into a real BOM, pin map, wiring graph, firmware, and hosted dashboard — with accounts, plans, and ownership built in.',
   applicationName: 'Wireup',
 };
 
@@ -19,7 +21,9 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>
+        <AuthProvider>{children}</AuthProvider>
+      </body>
     </html>
   );
 }

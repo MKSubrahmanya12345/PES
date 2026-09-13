@@ -314,6 +314,10 @@ export interface ChatMessage {
 /** The serialised project as consumed by the API and the frontend. */
 export interface ProjectState {
   id: string;
+  /** Owning user id (multi-tenant). Empty only on legacy fixtures. */
+  ownerId: string;
+  orgId: string | null;
+  visibility: 'private' | 'unlisted' | 'public';
   name: string;
   prompt: string;
   status: ProjectStatus;
