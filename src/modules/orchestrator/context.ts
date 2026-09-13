@@ -381,7 +381,9 @@ export function buildRefreshers(deps: RefresherDeps): FixerRefreshers {
         ...(controller.profile ? { profile: controller.profile } : {}),
         revision: project.revision,
         prompt: project.prompt,
-        ...(bedrock.configured && llmCodegenEnabled() ? { llmProvider: bedrockSketchPlanProvider() } : {}),
+        ...((bedrock.configured || Boolean(process.env.GEMINI_API_KEY)) && llmCodegenEnabled()
+          ? { llmProvider: bedrockSketchPlanProvider() }
+          : {}),
         ...(events ? { events } : {}),
       });
       return {

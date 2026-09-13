@@ -33,10 +33,6 @@ import {
 } from '@/lib/models';
 import { logger } from '@/lib/logging/logger';
 import { nowIso } from '@/lib/validation/time';
-import { planHardware } from '@/modules/hardware-planner';
-import { planSoftware } from '@/modules/software-planner';
-import { generateCode } from '@/modules/code-generator';
-import type { ContentBlock, Message, Tool } from '@aws-sdk/client-bedrock-runtime';
 
 import type {
   AgentBlackboard,
@@ -602,58 +598,6 @@ export async function runHardwareAgent(input: AgentRunInput): Promise<AgentRunOu
         logStep,
       });
     } catch (error) {
-      hwHandle.fail(`Hardware selection hit an error: ${error instanceof Error ? error.message : 'unknown'}`);
-      logger.warn({ error }, 'agent hardware selection error');
-    }
-  }
-
-  // 2. Ensure Pin Allocation (check that all selected components have pins assigned)
-  const controller = blackboard.selections.find((s) => s.category === 'microcontroller');
-  const hardwareComponents = blackboard.selections.filter((s) => s.category !== 'microcontroller');
-  const expectedPinCount = hardwareComponents.length > 0 ? hardwareComponents.length : 1;
-  const pinsComplete = blackboard.pinAssignments.length >= expectedPinCount;
-
-  if (!pinsComplete) {
-    const pinHandle = events.start('pin_assignment_started', 'Agent assigning and testing microcontroller GPIO pins...', {
-      stage: 'pins',
-    });
-
-    // Log if ReAct partially assigned pins
-    if (blackboard.pinAssignments.length > 0) {
-      logger.warn(
-        {
-          projectName,
-          assignedPins: blackboard.pinAssignments.length,
-          expectedPins: expectedPinCount,
-        },
-        'ReAct loop partially assigned pins; completing assignment',
-      );
-      blackboard.notes.push(
-        `Note: ReAct loop assigned ${blackboard.pinAssignments.length} pins but ${expectedPinCount} expected. ` +
-          'Re-running pin assignment to ensure completeness.',
-      );
-    }
-
-    try {
-      const pinResult = await ALL_AGENT_TOOLS.assign_and_verify_pins.execute({}, toolContext);
-      logStep({
-        step: steps.length + 1,
-        thought: 'Assigning microcontroller pins and checking for bus/channel conflicts.',
-        action: { tool: 'assign_and_verify_pins', args: {} },
-        result: pinResult,
-        timestamp: nowIso(),
-      });
-
-      if (pinResult.success) {
-        pinHandle.complete(`Assigned ${blackboard.pinAssignments.length} pins with zero conflicts.`);
-      } else {
-        pinHandle.fail(`Pin allocation alert: ${pinResult.message}`);
-      }
-    } catch (error) {
-      pinHandle.fail(`Pin allocation threw: ${error instanceof Error ? error.message : 'unknown'} — the fixer will retry from validation.`);
-      blackboard.notes.push(`Pin allocation threw (${error instanceof Error ? error.message : 'unknown'}); validation's fix loop will re-derive the pin plan.`);
-      logger.warn({ err: error }, 'agent pin allocation error');
-    }
       const message = error instanceof Error ? error.message : String(error);
       logger.warn({ error, model: driver.model, transport: driver.transport }, 'agent model tool loop interrupted; using deterministic completion');
       events.emit('info', `Model tool loop unavailable (${message}) — deterministic engineering tools are completing the build.`, {
@@ -703,26 +647,6 @@ export async function runHardwareAgent(input: AgentRunInput): Promise<AgentRunOu
       blackboard.notes.push(warning);
       logger.warn({ projectName, before: before.unfulfilledRequirements, after: after.unfulfilledRequirements }, 'agent selection coverage needs review');
     }
-
-    try {
-      const wireResult = await ALL_AGENT_TOOLS.route_wiring.execute({}, toolContext);
-      logStep({
-        step: steps.length + 1,
-        thought: 'Routing electrical nets (VCC, 3V3, 5V, GND, I2C, SPI, PWM).',
-        action: { tool: 'route_wiring', args: {} },
-        result: wireResult,
-        timestamp: nowIso(),
-      });
-
-      if (wireResult.success) {
-        wireHandle.complete(`Routed ${(blackboard as AgentBlackboard).wiring?.connections.length ?? 0} circuit connections.`);
-      } else {
-        wireHandle.fail(`Wiring alert: ${wireResult.message}`);
-      }
-    } catch (error) {
-      wireHandle.fail(`Wiring threw: ${error instanceof Error ? error.message : 'unknown'} — the fixer will retry from validation.`);
-      blackboard.notes.push(`Wiring threw (${error instanceof Error ? error.message : 'unknown'}); validation's fix loop will re-derive the wiring graph.`);
-      logger.warn({ err: error }, 'agent wiring error');
     if (!compatibility.success) {
       blackboard.notes.push(`Compatibility review reported: ${compatibility.message}`);
     }
@@ -802,82 +726,6 @@ export async function runHardwareAgent(input: AgentRunInput): Promise<AgentRunOu
       }
     }
 
-    /*
-     * Firmware is the one artifact a build can never ship without: "No
-     * firmware source was generated" plus a schema violation on the empty
-     * artifact is a dead project, and a tool failure (no pins yet, a planner
-     * throw) used to leave exactly that. So the tool gets two chances and a
-     * direct deterministic synthesis backs them both up — pins first if the
-     * tool could not run without them, then generateCode, which always
-     * produces at least the rooted template.
-     */
-    try {
-      let fwResult = await ALL_AGENT_TOOLS.generate_firmware.execute({}, toolContext);
-      if (!fwResult.success && blackboard.pinAssignments.length === 0) {
-        // The usual refusal is "no pins assigned yet" — assign them and retry.
-        await ALL_AGENT_TOOLS.assign_and_verify_pins.execute({}, toolContext);
-        fwResult = await ALL_AGENT_TOOLS.generate_firmware.execute({}, toolContext);
-      }
-      logStep({
-        step: steps.length + 1,
-        thought: 'Authoring and compiling embedded firmware grounded on the allocated pin map.',
-        action: { tool: 'generate_firmware', args: {} },
-        result: fwResult,
-        timestamp: nowIso(),
-      });
-
-      if (fwResult.success) {
-        fwHandle.complete(`Firmware synthesized: ${(blackboard as AgentBlackboard).code?.files.length ?? 0} files.`);
-      } else {
-        throw new Error(fwResult.message);
-      }
-    } catch (toolError) {
-      const message = toolError instanceof Error ? toolError.message : String(toolError);
-      logger.warn({ err: toolError }, 'agent firmware tool failed; synthesising deterministically');
-      try {
-        const controllerSel = blackboard.selections.find((s) => s.category === 'microcontroller');
-        const controllerDef = blackboard.workingCatalog.find((c) => c.id === controllerSel?.componentId);
-        const softwarePlan =
-          blackboard.softwarePlan ??
-          planSoftware({
-            requirements,
-            selections: blackboard.selections,
-            catalog: blackboard.workingCatalog,
-            assignments: blackboard.pinAssignments,
-            serialLinks: blackboard.serialLinks ?? [],
-            i2cBuses: blackboard.i2cBuses ?? [],
-            controllerInstanceId: controllerSel?.instances[0]?.instanceId,
-            controllerComponentId: controllerSel?.componentId,
-            events,
-          });
-        blackboard.softwarePlan = softwarePlan;
-        blackboard.code = await generateCode({
-          projectName: blackboard.projectName ?? projectName,
-          projectSummary: requirements.summary,
-          requirements,
-          selections: blackboard.selections,
-          catalog: blackboard.workingCatalog,
-          assignments: blackboard.pinAssignments,
-          serialLinks: blackboard.serialLinks ?? [],
-          i2cBuses: blackboard.i2cBuses ?? [],
-          softwarePlan,
-          controllerName: controllerDef?.name ?? 'Arduino',
-          revision: 1,
-          prompt: blackboard.prompt,
-          events,
-        });
-        fwHandle.complete(
-          `Firmware tool failed (${message}) — sketch synthesised deterministically: ${blackboard.code.files.length} file(s).`,
-        );
-      } catch (directError) {
-        fwHandle.fail(
-          `Firmware synthesis failed: ${directError instanceof Error ? directError.message : 'unknown'} — validation's fix loop will regenerate the sketch.`,
-        );
-        blackboard.notes.push(
-          `Firmware synthesis failed (${directError instanceof Error ? directError.message : 'unknown'}); validation's fix loop will regenerate the sketch.`,
-        );
-        logger.warn({ err: directError }, 'agent direct firmware synthesis error');
-      }
     if (blackboard.firmwareCompile?.status !== 'passed') {
       const detail = blackboard.firmwareCompile?.diagnostics[0] ?? firmwareResult.message;
       firmwareHandle.fail(`Firmware alert: ${detail}`);
@@ -889,54 +737,6 @@ export async function runHardwareAgent(input: AgentRunInput): Promise<AgentRunOu
     firmwareHandle.complete(`Firmware synthesized: ${blackboard.code?.files.length ?? 0} file(s).`);
   }
 
-  // 5. Ensure Artifacts (Diagram, BOM, Instructions)
-  // Check completeness: diagram should have components matching selections, instructions should have sections
-  const diagramComplete = blackboard.diagram &&
-    blackboard.diagram.components.length >= blackboard.selections.length * 0.5;
-  const instructionsComplete = blackboard.instructions &&
-    blackboard.instructions.sections.length > 0;
-  const artifactsComplete = diagramComplete && instructionsComplete && Boolean(blackboard.libraries);
-
-  if (!artifactsComplete) {
-    const artHandle = events.start('instructions_generation_started', 'Agent building simulation diagram and instructions...', {
-      stage: 'instructions',
-    });
-
-    // Log if ReAct partially generated artifacts
-    if ((blackboard.diagram && !diagramComplete) || (blackboard.instructions && !instructionsComplete)) {
-      logger.warn(
-        {
-          projectName,
-          diagramComponents: blackboard.diagram?.components.length ?? 0,
-          expectedComponents: blackboard.selections.length,
-          instructionSections: blackboard.instructions?.sections.length ?? 0,
-          hasLibraries: Boolean(blackboard.libraries),
-        },
-        'ReAct loop partially generated artifacts; regenerating',
-      );
-      blackboard.notes.push(
-        `Note: ReAct loop partially generated artifacts (diagram: ${blackboard.diagram?.components.length ?? 0}/` +
-        `${blackboard.selections.length} components, instructions: ${blackboard.instructions?.sections.length ?? 0} sections). ` +
-        'Regenerating to ensure completeness.',
-      );
-    }
-
-    try {
-      const artResult = await ALL_AGENT_TOOLS.build_artifacts.execute({}, toolContext);
-      logStep({
-        step: steps.length + 1,
-        thought: 'Generating Wokwi/Velxio simulation diagram and step-by-step assembly guide.',
-        action: { tool: 'build_artifacts', args: {} },
-        result: artResult,
-        timestamp: nowIso(),
-      });
-
-      artHandle.complete('Circuit diagram, libraries, and assembly instructions ready.');
-    } catch (error) {
-      artHandle.fail(`Artifact generation threw: ${error instanceof Error ? error.message : 'unknown'} — the fixer will re-derive them.`);
-      blackboard.notes.push(`Artifact generation threw (${error instanceof Error ? error.message : 'unknown'}); validation's fix loop will re-derive the diagram and instructions.`);
-      logger.warn({ err: error }, 'agent artifact generation error');
-    }
   const artifactHandle = events.start('instructions_generation_started', 'Building simulation diagram, libraries, and instructions...', { stage: 'instructions' });
   const artifactResult = await ALL_AGENT_TOOLS.build_artifacts.execute({}, toolContext);
   canonicalResult('build_artifacts', artifactResult, logStep);

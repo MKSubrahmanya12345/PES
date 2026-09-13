@@ -49,7 +49,7 @@ import { generateSketch, type SketchContext } from './templates';
 import { applyFirmwareHygiene } from './hygiene';
 import { braceBalance, assessCodeQuality, looksLikePinConstant, normalizeConstantName } from './quality';
 import { roleWordFor, rootLlmSketch, type RootingContext } from './rooting';
-import type { SketchPlanProvider } from './llm';
+import { bedrockSketchPlanProvider, llmCodegenEnabled, type SketchPlanProvider } from './llm';
 
 /* Public re-exports: the validator and fixer import these from this module. */
 export { assessCodeQuality, braceBalance } from './quality';
@@ -327,11 +327,14 @@ export async function generateCode(input: CodeGeneratorInput): Promise<CodeArtif
   /* --------------------------------------------------------------------- */
   /* 1. AI-first: the model authors the behaviour, rooting owns the hardware */
   /* --------------------------------------------------------------------- */
+  const activeProvider =
+    input.llmProvider ??
+    (llmCodegenEnabled() && (Boolean(process.env.GEMINI_API_KEY) || Boolean(env().bedrock.modelId)) ? bedrockSketchPlanProvider() : undefined);
   const wantsLlm =
-    env().agent.enableLlmCodegen && input.llmProvider !== undefined && typeof input.prompt === 'string' && input.prompt.trim().length > 0;
+    env().agent.enableLlmCodegen && activeProvider !== undefined && typeof input.prompt === 'string' && input.prompt.trim().length > 0;
 
-  if (wantsLlm && input.llmProvider) {
-    const provider = input.llmProvider;
+  if (wantsLlm && activeProvider) {
+    const provider = activeProvider;
     const startedAt = Date.now();
     const call: LlmCallRecord = {
       id: createId('llm'),

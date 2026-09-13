@@ -15,6 +15,7 @@ import {
 import { createLogger, describeError } from '@/lib/logging/logger';
 import { applyDnsResultOrder } from '@/lib/net/dns';
 import { env, requireBedrockEnv } from '@/lib/validation/env';
+import { isDirectGeminiModelId } from '@/lib/models/detect';
 
 const logger = createLogger('bedrock');
 
@@ -93,6 +94,23 @@ function buildClient(): { client: BedrockRuntimeClient; region: string } {
 /** Resolve which model serves a given operation. */
 export function resolveModel(op: BedrockOp): string {
   const config = env().bedrock;
+  const models = env().models;
+
+  // Force Gemini first for firmware generation (and side chat which also uses codegen)
+  if (op === 'codegen') {
+    const geminiKey = models.geminiApiKey || process.env.GEMINI_API_KEY;
+    const configuredGemini =
+      config.codegenModelId && (config.codegenModelId.toLowerCase().includes('gemini') || isDirectGeminiModelId(config.codegenModelId))
+        ? config.codegenModelId
+        : undefined;
+    if (configuredGemini) {
+      return configuredGemini;
+    }
+    if (geminiKey) {
+      return config.codegenModelId || 'gemini-2.0-flash';
+    }
+  }
+
   const model =
     (op === 'validation' ? config.validationModelId : undefined) ??
     (op === 'fix' ? config.fixerModelId : undefined) ??
@@ -425,10 +443,15 @@ export async function describeBedrockConfig(): Promise<{
   // Detect direct-transport availability WITHOUT requiring Bedrock creds.
   const hasOpenAI = Boolean(env().models.openaiApiKey);
   const hasAnthropic = Boolean(env().models.anthropicApiKey);
-  const hasGemini = Boolean(env().models.geminiApiKey);
+  const hasGemini = Boolean(env().models.geminiApiKey || process.env.GEMINI_API_KEY);
   const directAstra = /^gpt-6-astra(?:[-.][a-z0-9]+)*$/.test(haystack);
   const directGemini = haystack.startsWith('gemini-') && !haystack.includes('arn:') && !haystack.includes(':');
   const directFable = /fable|opus-5|sonnet-5/.test(haystack);
+  const effectiveCodegenModel =
+    (config.codegenModelId && (config.codegenModelId.toLowerCase().includes('gemini') || isDirectGeminiModelId(config.codegenModelId))
+      ? config.codegenModelId
+      : undefined) ??
+    (hasGemini ? (config.codegenModelId || 'gemini-2.0-flash') : config.codegenModelId);
 
   if (directAstra && hasOpenAI) {
     return {
@@ -437,7 +460,7 @@ export async function describeBedrockConfig(): Promise<{
       model: config.modelId,
       validationModel: config.validationModelId || config.modelId,
       fixerModel: config.fixerModelId || config.modelId,
-      codegenModel: config.codegenModelId,
+      codegenModel: effectiveCodegenModel,
       transport: 'openai',
       maxTokens: config.maxTokens,
       temperature: config.temperature,
@@ -450,7 +473,7 @@ export async function describeBedrockConfig(): Promise<{
       model: config.modelId,
       validationModel: config.validationModelId || config.modelId,
       fixerModel: config.fixerModelId || config.modelId,
-      codegenModel: config.codegenModelId,
+      codegenModel: effectiveCodegenModel,
       transport: 'anthropic',
       maxTokens: config.maxTokens,
       temperature: config.temperature,
@@ -463,7 +486,7 @@ export async function describeBedrockConfig(): Promise<{
       model: config.modelId,
       validationModel: config.validationModelId || config.modelId,
       fixerModel: config.fixerModelId || config.modelId,
-      codegenModel: config.codegenModelId,
+      codegenModel: effectiveCodegenModel,
       transport: 'gemini',
       maxTokens: config.maxTokens,
       temperature: config.temperature,
@@ -478,16 +501,30 @@ export async function describeBedrockConfig(): Promise<{
       model: config.modelId,
       validationModel: config.validationModelId || config.modelId,
       fixerModel: config.fixerModelId || config.modelId,
-      codegenModel: config.codegenModelId,
+      codegenModel: effectiveCodegenModel,
       transport: 'bedrock',
       maxTokens: config.maxTokens,
       temperature: config.temperature,
     };
   } catch (error) {
+    if (hasGemini) {
+      return {
+        configured: true,
+        region: config.region,
+        model: config.modelId,
+        validationModel: config.validationModelId || config.modelId,
+        fixerModel: config.fixerModelId || config.modelId,
+        codegenModel: effectiveCodegenModel,
+        transport: 'gemini',
+        maxTokens: config.maxTokens,
+        temperature: config.temperature,
+      };
+    }
     return {
       configured: false,
       region: config.region,
       model: config.modelId,
+      codegenModel: effectiveCodegenModel,
       maxTokens: config.maxTokens,
       temperature: config.temperature,
       problem: describeError(error).message,

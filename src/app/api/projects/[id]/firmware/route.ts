@@ -74,7 +74,8 @@ export async function POST(request: NextRequest, context: RouteContext) {
 
     if (body.mode === 'chat') {
       const bedrock = await describeBedrockConfig();
-      const provider = bedrock.configured && llmCodegenEnabled() ? bedrockSketchEditProvider() : undefined;
+      const hasGemini = Boolean(process.env.GEMINI_API_KEY);
+      const provider = (bedrock.configured || hasGemini) && llmCodegenEnabled() ? bedrockSketchEditProvider() : undefined;
 
       const turn = await runFirmwareChatTurn({ project, message: body.message, provider });
       for (const call of turn.llmCalls) {
